@@ -45,6 +45,9 @@ class Finding:
     detail: str = ""
     recommendation: str = ""
 
+    def __post_init__(self) -> None:
+        self.severity = validate_severity(self.severity)
+
     # NOTE: __lt__ is implemented so that sorted() works without a key=.
     # Most severe first means a higher rank comes before a lower rank, so we
     # reverse the usual comparison (higher rank → "less than" for sort order).

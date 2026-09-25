@@ -41,9 +41,12 @@ def chunk_text(source: str, chunk_lines: int = 300, overlap_lines: int = 30) -> 
         # but the spec pins counting to str.splitlines(), so we use that for
         # the invariant; we rebuild from the plain splitlines() for simplicity).
         chunk_lines_list = all_lines[start:end]
-        text = "\n".join(chunk_lines_list)
-        # If original source had a trailing newline and this is the last chunk,
-        # the invariant is on splitlines() so this is fine.
+        # Join with "\n" and append a terminal "\n" so that empty lines at the
+        # end of the slice round-trip correctly through str.splitlines():
+        #   "\n".join([..., ""]) ends with "\n", and splitlines() drops that
+        #   trailing newline, losing the empty line.  Adding one extra "\n"
+        #   ensures splitlines() reconstructs the slice exactly.
+        text = "\n".join(chunk_lines_list) + "\n"
         start_line = start + 1        # convert to 1-based
         end_line = end                # end is already the 1-based last line (end-1+1)
         chunks.append(Chunk(text=text, start_line=start_line, end_line=end_line, index=index))

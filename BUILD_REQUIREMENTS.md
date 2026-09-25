@@ -7,9 +7,94 @@ honest record of **what was asked for**, increment by increment, in order.
 context: they describe interfaces that already exist under `src/`, and later modules should
 conform to those rather than invent their own.
 
+**No increment is currently ACTIVE.** The next one is written when the plan calls for it.
+
 ---
 
-# ⬅ ACTIVE — Increment 2: `src/chunk.py`
+# Increment 3: two conformance fixes, each with a PROVEN can-fail arm — ✅ DONE
+
+Two behaviours under `src/` do **not** satisfy the requirements already written for them. Find them,
+fix them, and **prove the fix**. The proof is the deliverable — the fix is the easy half.
+
+**Both failures are the same requirement, stated once:** *a stated invariant must be enforced where
+the invalid state can first exist, and must be tested against an input that can actually fail it.*
+
+## Deliverable A — `src/findings.py`
+
+**Requirement:** an unrecognised severity must be rejected **when the object is constructed**, not
+deferred to a later comparison. Today `Finding("r", "nonsense", loc)` constructs successfully and the
+failure surfaces much later, at comparison time, as an error that names no requirement.
+
+A guard that only fires at comparison time is *in the wrong place*. The invalid state must be
+**unconstructible**.
+
+## Deliverable B — `src/chunk.py`
+
+**Requirement:** the point-4 invariant —
+
+```python
+chunk.text.splitlines() == source.splitlines()[chunk.start_line-1 : chunk.end_line]
+```
+
+— must hold for **every** input, not merely for the inputs the current self-test happens to visit.
+**It currently does not.** Find an input where it breaks, fix it, and keep the fix.
+
+## Deliverable C — `tests/arms.py` — the harness that proves it
+
+A standalone harness. It takes **one argument: a path**, so it can be pointed at a copy of the module
+that is *not* the one in `src/`.
+
+```
+python tests/arms.py <path>
+```
+
+`<path>` may be a file or a directory containing `findings.py` and `chunk.py`. The harness imports the
+module(s) **from that path** and asserts:
+
+- **ARM-1 — severity is enforced at construction.** Constructing a `Finding` with an unknown severity
+  raises `ValueError`. A valid severity still constructs, and a list of two or more sorts
+  most-severe-first.
+- **ARM-2 — the chunk round trip.** Over several sources and argument combinations, every chunk
+  satisfies the point-4 invariant above, and every line of a non-empty source is covered.
+
+Print one `PASS`/`FAIL` line per arm and exit **0 only if all pass**, non-zero otherwise. Standard
+library only.
+
+⚠ **A check must be able to fail.** An arm that passes against both the fixed and the unfixed code has
+proved nothing — it has only performed the appearance of a check.
+
+## THE PROOF OBLIGATION — this is the deliverable
+
+The two unfixed revisions are in git history and are **immutable**. Extract them and run the *same*
+harness against each:
+
+```
+git show b7a3ecb:src/findings.py   > <prefix-dir>/findings.py     # the unfixed findings.py
+git show 8eb7be3:src/chunk.py      > <prefix-dir>/chunk.py        # the unfixed chunk.py
+python tests/arms.py <prefix-dir>        # MUST FAIL, and MUST name which arm failed
+python tests/arms.py src                 # MUST PASS
+```
+
+**Report all four results verbatim**, including each exit code. Note that `git show` writes to stdout —
+redirect it to a file. Use an **absolute path** for anything Python opens.
+
+**Why this is required and not a nicety:** *a green run against the fixed code alone cannot
+distinguish "the fix works" from "the harness stopped looking."* The failure against the unfixed
+revision is the only thing that makes the pass mean anything.
+
+## Acceptance
+
+- `python src/findings.py` exits 0 · `python src/chunk.py` exits 0
+- `python tests/arms.py src` exits **0**
+- `python tests/arms.py <prefix-dir>` exits **non-zero**
+- Standard library only. `src/findings.py` and `src/chunk.py` keep their existing public API;
+  `tests/arms.py` is the only new file.
+
+---
+
+# Increment 2: overlapping chunker + offset mapping — ✅ DONE
+
+Delivered at `src/chunk.py`. Retained below as context: it is the interface later modules conform to.
 
 ## Why this exists (the problem, stated plainly)
 
