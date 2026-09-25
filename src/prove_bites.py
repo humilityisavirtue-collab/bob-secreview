@@ -21,16 +21,27 @@ MARGIN TEST — no constant
 --------------------------
 The twin is a usable control only if it is **measurably closer** to the source
 than a self-generated baseline is.  The baseline is the SequenceMatcher ratio
-between ``source`` and its own lines in **reverse-sorted order**
-(``sorted(lines, reverse=True)``).  It is computed entirely from the inputs,
-requires no calibration, and re-runs reproducibly.
+between ``source`` and a **deterministic shuffle of its own lines**.  It is
+computed entirely from the inputs, requires no calibration, and re-runs
+reproducibly.
 
-Why reverse-sorted cannot be the identity: ``sorted(lines, reverse=True) == lines``
-only when the lines are already in descending lexicographic order.  A source in
-*ascending* order is NOT in descending order, so baseline < 1.0 — the rearrangement
-is not the identity.  The previous ascending-sort baseline WAS the identity for
-any sorted source (baseline == 1.0), making the margin test permanently
-unsatisfiable for any file whose lines happened to be in order.
+Two properties are required of the rearrangement.  The second is easy to miss:
+
+1. **NO FIXED POINTS** — the rearrangement must not be able to equal the source's
+   own order.  An earlier form compared the source against its own lines sorted
+   ascending: the identity for an already-ascending file, baseline 1.0, margin
+   permanently unsatisfiable, every reviewer refused.  The next form used
+   reverse-sort, which is the identity for a DESCENDING file — the same failure,
+   relocated one notch over.  **Every fixed permutation has inputs it maps to
+   themselves.**  So the shuffle is generated and then VERIFIED non-identity, with
+   reversal and rotation as checked fallbacks, and 1.0 (fail closed) only when
+   every line is identical and there is no order to perturb.
+2. **DISCRIMINATION, NOT WIDTH** — the baseline must sit high enough that a twin
+   which is not a near-copy fails to clear it.  A reversal is maximally
+   dissimilar (~0.03), which reads as a wide margin and is in fact a permissive
+   one: an unrelated file sharing a single line clears it and is then accepted as
+   a usable control.  A shuffle holds the multiset of lines fixed, giving ~0.3 —
+   above an unrelated file, below a genuine near-copy at 0.95+.
 
     twin_ratio > twin_ratio_baseline  →  margin exists, control is usable
     twin_ratio ≤ twin_ratio_baseline  →  INCONCLUSIVE; the twin cannot be
@@ -54,6 +65,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+import random
 from difflib import SequenceMatcher
 from typing import Callable
 
@@ -122,37 +134,49 @@ class BiteProof:
 def _compute_baseline(source: str) -> float:
     """Return the self-generated baseline for *source*.
 
-    The baseline is the SequenceMatcher ratio of *source* against its own
-    lines in **reverse-sorted order** (``sorted(lines, reverse=True)``).
-    It is deterministic (same input → same output), derived entirely from
-    the input, and requires no constant.
+    The baseline is the SequenceMatcher ratio of *source* against a copy of its
+    own lines in REVERSED order.  It is deterministic, derived entirely from the
+    input, and requires no constant.
 
-    Why reverse-sorted cannot be the identity
-    ------------------------------------------
-    ``sorted(lines, reverse=True) == lines`` only when the lines are already
-    in *descending* lexicographic order.  A source whose lines are in
-    *ascending* order (the common case that broke the old sorted-copy
-    baseline) is NOT in descending order, so the rearrangement differs from
-    the original and baseline < 1.0.  More precisely: for any two distinct
-    lines, the ascending and descending orderings are different sequences,
-    so baseline < 1.0 for any source with 2 or more distinct lines that are
-    not already in descending order.
+    The property that matters is NOT which rearrangement is chosen -- it is that
+    the rearrangement has NO FIXED POINTS.  Every fixed permutation has inputs it
+    maps to themselves: an ascending sort is the identity for ascending input, a
+    descending sort is the identity for descending input, a reversal is the
+    identity for a palindrome.  A baseline of 1.0 then makes ``twin_ratio >
+    baseline`` unsatisfiable and the module refuses every reviewer permanently,
+    including a perfect one.
 
-    The previous implementation used ``sorted(src_lines)`` (ascending sort).
-    That rearrangement IS the identity whenever the source is already in
-    sorted (ascending) order, causing baseline == 1.0 and making the margin
-    test permanently unsatisfiable for any file whose lines happen to be in
-    order.  Using the *reverse* sort eliminates that failure mode while
-    keeping the baseline well above zero (a meaningful reference point).
+    So: reverse, and if the reversal IS the identity (a palindromic line list),
+    rotate by one instead.  An input survives both only when every line is
+    identical, in which case there is no order to perturb and the margin cannot
+    be established at all -- reported as 1.0, which fails closed.
 
-    The baseline answers the question: "how similar does a naively rearranged
-    copy of the source look to the source?"  A twin that is not measurably
-    closer than this is indistinguishable from a reverse-sorted copy and
-    cannot serve as a discriminating control.
+    Why a shuffle and not a reversal: the baseline must DISCRIMINATE, not merely
+    sit low. A reversal of an ordered file is maximally dissimilar (ratio ~0.03),
+    which sounds like a wide margin but is a permissive one -- an unrelated twin
+    sharing a single line clears it and is then accepted as a usable control. A
+    shuffle holds the multiset of lines fixed and reorders it, giving a baseline
+    high enough (~0.3) that an unrelated file does not clear it while a genuine
+    near-copy (0.95+) does. Reversal is kept as a fallback, not as the primary.
     """
     src_lines = source.splitlines()
-    revsorted_lines = sorted(src_lines, reverse=True)
-    return SequenceMatcher(None, src_lines, revsorted_lines, autojunk=False).ratio()
+    if len(src_lines) < 2:
+        return 1.0
+
+    # Generate, then VERIFY the rearrangement is not the identity, falling back
+    # deterministically. Rotation is NOT used as the primary fallback: a rotation
+    # leaves an (n-1)-line matching block, so its similarity stays high and a
+    # legitimate twin would not clear it.
+    rearranged = list(src_lines)
+    random.Random(0).shuffle(rearranged)              # deterministic shuffle
+    if rearranged == src_lines:                       # collision, or one line
+        rearranged = list(reversed(src_lines))
+    if rearranged == src_lines:                       # palindromic
+        rearranged = src_lines[1:] + src_lines[:1]    # rotate by one
+    if rearranged == src_lines:                       # every line identical
+        return 1.0                                    # no order to perturb: fail closed
+
+    return SequenceMatcher(None, src_lines, rearranged, autojunk=False).ratio()
 
 
 def _compute_twin_stats(source: str, twin: str) -> tuple[float, int, int]:
@@ -437,6 +461,14 @@ if __name__ == "__main__":
     SORTED_TWIN = SORTED_SOURCE.replace("        return evil(self.x)",
                                         "        return safe(self.x)")
 
+    # The SAME lines in DESCENDING order. An ascending sort is not the identity
+    # for this file; a REVERSE sort is. This fixture is the regression guard for
+    # the failure that shipped when the baseline used reverse-sort: baseline
+    # collapsed to 1.0 and every reviewer was refused permanently.
+    DESCENDING_SOURCE = "\n".join(reversed(SORTED_SOURCE.splitlines()))
+    DESCENDING_TWIN = DESCENDING_SOURCE.replace("        return evil(self.x)",
+                                                "        return safe(self.x)")
+
     # Same lines as SORTED_SOURCE but in shuffled (non-sorted) order —
     # concrete Python structure that happens to be in unsorted line order.
     SHUFFLED_SOURCE = "\n".join([
@@ -516,6 +548,8 @@ if __name__ == "__main__":
           proof_2line.status == "INCONCLUSIVE")
     check("T1: may_trust_clean() is False",
           proof_2line.may_trust_clean() is False)
+    check("T5b: DESCENDING source baseline < 1.0 (the reverse-sort fixed point)",
+          _compute_baseline(DESCENDING_SOURCE) < 1.0)
     check("T1: twin_ratio_baseline exposed",
           proof_2line.twin_ratio_baseline >= 0.0)
     print()
