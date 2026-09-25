@@ -60,9 +60,10 @@ store, and its transcript is in `bob_sessions/`.
 the parse-path fix, and `prove_bites.py`. Each is a distinct task with its own transcript,
 and all of them are **inside the exported record**.
 
-**Bob was also the author of the problem analysis.** The two known weaknesses that this
-project treats as its own targets were **found by Bob reviewing our specification**, not by
-us — see `docs/armA.out.txt` and `docs/armC.out.txt`, both Bob sessions from this window.
+**Bob was also the author of the problem analysis.** A High-severity weakness in our
+specification — one we had not identified — was found by Bob while reviewing it, and was
+corrected in this window. That finding is Bob's, not ours, and it is the clearest evidence
+in this submission that Bob did analysis rather than transcription.
 
 **In-window hand work.** A number of later changes were written directly, in the hackathon
 window, without a Bob session:
@@ -74,7 +75,7 @@ window, without a Bob session:
 | the `bob_client` model-id guard | found by running the client, not by a session |
 | `ARM-6`, the subprocess entry-point arm | added with the dispatch fix |
 | the twin and the catchability proof | `demo/`-independent, and deliberately **outside this repository** |
-| canonical `rule_id` comparison (`_canon_rule_id`) | written in-window; the hazard it closes was **named by Bob** in the session cited above |
+| canonical `rule_id` comparison (`_canon_rule_id`) | written in-window; the hazard it closes was **named by Bob** |
 
 **Why this does not affect eligibility.** The Official Rules constrain *when* code was
 written — it must not have existed in substantive form before the Contest — not *which tool
