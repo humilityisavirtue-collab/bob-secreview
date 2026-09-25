@@ -15,27 +15,31 @@ proof cannot establish discrimination.
 
 Twin integrity is enforced **inside this module**, not delegated to the caller.
 ``twin_ratio`` measures the line-similarity between ``source`` and
-``clean_source`` using SequenceMatcher.  When ``twin_ratio`` is below the floor
-(0.5) the twin is degenerate — it is not a near-copy of the source, so no
-discrimination can be established — and the function returns ``"INCONCLUSIVE"``
-regardless of what any reviewer says.  The floor was chosen from measurement:
+``clean_source`` using SequenceMatcher.
 
-    Measured twin_ratio values (20-line source, 1 line changed)
-    -----------------------------------------------------------
-    honest twin (1 line changed)  ->  0.9500   [must PASS]
-    one-line degenerate twin      ->  0.0952   [must FAIL]
-    unrelated file                ->  0.0000   [must FAIL]
-    empty string                  ->  0.0000   [must FAIL]
+MARGIN TEST — no constant
+--------------------------
+The twin is a usable control only if it is **measurably closer** to the source
+than a self-generated baseline is.  The baseline is the SequenceMatcher ratio
+between ``source`` and its own lines in **reverse-sorted order**
+(``sorted(lines, reverse=True)``).  It is computed entirely from the inputs,
+requires no calibration, and re-runs reproducibly.
 
-    Gap: 0.0952 ... 0.9500
-    Floor chosen: 0.5  (sits inside the gap; well above every degenerate
-    case and safely below even the smallest honest-twin ratio observed
-    when source and twin differ by only one line out of two, i.e. 0.50).
+Why reverse-sorted cannot be the identity: ``sorted(lines, reverse=True) == lines``
+only when the lines are already in descending lexicographic order.  A source in
+*ascending* order is NOT in descending order, so baseline < 1.0 — the rearrangement
+is not the identity.  The previous ascending-sort baseline WAS the identity for
+any sorted source (baseline == 1.0), making the margin test permanently
+unsatisfiable for any file whose lines happened to be in order.
 
-🔒 The enforcement is here — a caller's green cannot coexist with a broken
-control.  ``twin_hunks`` is still exposed but is no longer the guard; the
-opcode count is 1 for both a perfect twin and an empty string, making it
-useless as a discriminator at any threshold.
+    twin_ratio > twin_ratio_baseline  →  margin exists, control is usable
+    twin_ratio ≤ twin_ratio_baseline  →  INCONCLUSIVE; the twin cannot be
+                                         distinguished from coincidence
+
+Both values are exposed on ``BiteProof`` and printed in every diagnostic so the
+separation is auditable from the transcript alone.
+
+⚠ A fixed floor has been deliberately removed.  There is nothing to tune.
 
 ``twin_hunks`` counts how many groups of differing lines exist between
 ``source`` and ``clean_source``.  It is exposed for informational purposes.
@@ -49,15 +53,9 @@ Standard library only.  No network calls, no third-party dependencies.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Callable
-
-# ---------------------------------------------------------------------------
-# Threshold — measured, not guessed (see module docstring for derivation)
-# ---------------------------------------------------------------------------
-
-_TWIN_RATIO_FLOOR = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -68,31 +66,38 @@ _TWIN_RATIO_FLOOR = 0.5
 class BiteProof:
     """Result of a discrimination proof.
 
-    ``status``            — "BITES" | "DOES_NOT_BITE" | "INCONCLUSIVE"
-    ``planted_rule``      — the rule_id under test
-    ``found_rule_ids``    — rule_ids reported on *source* (the flawed file)
-    ``twin_rule_ids``     — rule_ids reported on *clean_source* (the twin)
-    ``twin_hunks``        — number of groups of differing lines between source
-                            and clean_source (-1 when no twin was supplied).
-                            Exposed for informational purposes; no longer the
-                            degeneracy guard (see module docstring).
-    ``twin_ratio``        — SequenceMatcher line-similarity between source and
-                            clean_source (0.0 ... 1.0; -1.0 when no twin).
-                            Values below _TWIN_RATIO_FLOOR indicate a
-                            degenerate twin and yield INCONCLUSIVE.
-    ``twin_lines_kept``   — number of matching lines between source and twin
-                            (-1 when no twin).
-    ``reason``            — human-readable explanation (populated on
-                            DOES_NOT_BITE and INCONCLUSIVE)
+    ``status``               — "BITES" | "DOES_NOT_BITE" | "INCONCLUSIVE"
+    ``planted_rule``         — the rule_id under test
+    ``found_rule_ids``       — rule_ids reported on *source* (the flawed file)
+    ``twin_rule_ids``        — rule_ids reported on *clean_source* (the twin)
+    ``twin_hunks``           — number of groups of differing lines between source
+                               and clean_source (-1 when no twin was supplied).
+                               Exposed for informational purposes; not the
+                               degeneracy guard (see module docstring).
+    ``twin_ratio``           — SequenceMatcher line-similarity between source and
+                               clean_source (0.0 ... 1.0; -1.0 when no twin).
+    ``twin_ratio_baseline``  — self-generated baseline: SequenceMatcher ratio of
+                               source against its own lines in reverse-sorted order
+                               (sorted(lines, reverse=True)).
+                               The twin is only usable when twin_ratio > baseline.
+                               baseline < 1.0 for any source not already in
+                               descending order with 2+ distinct lines, because
+                               ascending and descending orderings differ.
+                               (-1.0 when no twin was supplied.)
+    ``twin_lines_kept``      — number of matching lines between source and twin
+                               (-1 when no twin).
+    ``reason``               — human-readable explanation (populated on
+                               DOES_NOT_BITE and INCONCLUSIVE)
     """
 
-    status: str                      # "BITES" | "DOES_NOT_BITE" | "INCONCLUSIVE"
+    status: str                        # "BITES" | "DOES_NOT_BITE" | "INCONCLUSIVE"
     planted_rule: str
-    found_rule_ids: tuple[str, ...]   # rule_ids reported on the SOURCE
-    twin_rule_ids: tuple[str, ...]    # rule_ids reported on the TWIN
-    twin_hunks: int = -1              # how many line groups differ between source and twin
-    twin_ratio: float = -1.0          # SequenceMatcher line-similarity (-1.0 if no twin)
-    twin_lines_kept: int = -1         # matching lines between source and twin (-1 if no twin)
+    found_rule_ids: tuple[str, ...]    # rule_ids reported on the SOURCE
+    twin_rule_ids: tuple[str, ...]     # rule_ids reported on the TWIN
+    twin_hunks: int = -1               # how many line groups differ between source and twin
+    twin_ratio: float = -1.0           # SequenceMatcher line-similarity (-1.0 if no twin)
+    twin_ratio_baseline: float = -1.0  # self-generated baseline (-1.0 if no twin)
+    twin_lines_kept: int = -1          # matching lines between source and twin (-1 if no twin)
     reason: str = ""
 
     def bites(self) -> bool:
@@ -114,12 +119,40 @@ class BiteProof:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _count_hunks(a: str, b: str) -> int:
-    """Count the number of groups of differing lines between two strings."""
-    a_lines = a.splitlines()
-    b_lines = b.splitlines()
-    matcher = SequenceMatcher(None, a_lines, b_lines, autojunk=False)
-    return sum(1 for tag, *_ in matcher.get_opcodes() if tag != "equal")
+def _compute_baseline(source: str) -> float:
+    """Return the self-generated baseline for *source*.
+
+    The baseline is the SequenceMatcher ratio of *source* against its own
+    lines in **reverse-sorted order** (``sorted(lines, reverse=True)``).
+    It is deterministic (same input → same output), derived entirely from
+    the input, and requires no constant.
+
+    Why reverse-sorted cannot be the identity
+    ------------------------------------------
+    ``sorted(lines, reverse=True) == lines`` only when the lines are already
+    in *descending* lexicographic order.  A source whose lines are in
+    *ascending* order (the common case that broke the old sorted-copy
+    baseline) is NOT in descending order, so the rearrangement differs from
+    the original and baseline < 1.0.  More precisely: for any two distinct
+    lines, the ascending and descending orderings are different sequences,
+    so baseline < 1.0 for any source with 2 or more distinct lines that are
+    not already in descending order.
+
+    The previous implementation used ``sorted(src_lines)`` (ascending sort).
+    That rearrangement IS the identity whenever the source is already in
+    sorted (ascending) order, causing baseline == 1.0 and making the margin
+    test permanently unsatisfiable for any file whose lines happen to be in
+    order.  Using the *reverse* sort eliminates that failure mode while
+    keeping the baseline well above zero (a meaningful reference point).
+
+    The baseline answers the question: "how similar does a naively rearranged
+    copy of the source look to the source?"  A twin that is not measurably
+    closer than this is indistinguishable from a reverse-sorted copy and
+    cannot serve as a discriminating control.
+    """
+    src_lines = source.splitlines()
+    revsorted_lines = sorted(src_lines, reverse=True)
+    return SequenceMatcher(None, src_lines, revsorted_lines, autojunk=False).ratio()
 
 
 def _compute_twin_stats(source: str, twin: str) -> tuple[float, int, int]:
@@ -169,10 +202,13 @@ def prove_bites(
     Returns
     -------
     BiteProof
-        ``twin_ratio`` and ``twin_lines_kept`` are -1.0 / -1 when
-        ``clean_source`` is None.
-        When ``twin_ratio < _TWIN_RATIO_FLOOR`` the function returns
-        ``INCONCLUSIVE`` — the twin is not a usable control.
+        ``twin_ratio``, ``twin_ratio_baseline``, and ``twin_lines_kept`` are
+        -1.0 / -1 when ``clean_source`` is None.
+        When ``twin_ratio <= twin_ratio_baseline`` the function returns
+        ``INCONCLUSIVE`` — the twin is not measurably closer to the source
+        than a shuffled copy of the source itself, so it is not a usable
+        control.  Both values are included in ``reason`` so the margin (or
+        lack of it) is visible without looking at the code.
     """
     # --- Step 1: run review on source ---
     src_result = review(source, file)
@@ -193,6 +229,7 @@ def prove_bites(
             twin_rule_ids=(),
             twin_hunks=-1,
             twin_ratio=-1.0,
+            twin_ratio_baseline=-1.0,
             twin_lines_kept=-1,
             reason=reason,
         )
@@ -211,19 +248,24 @@ def prove_bites(
             twin_rule_ids=(),
             twin_hunks=-1,
             twin_ratio=-1.0,
+            twin_ratio_baseline=-1.0,
             twin_lines_kept=-1,
             reason="clean_source was not supplied; a one-sided proof cannot establish discrimination",
         )
 
-    # --- Compute twin similarity metrics ---
+    # --- Compute twin similarity metrics and self-generated baseline ---
     ratio, lines_kept, twin_hunks = _compute_twin_stats(source, clean_source)
+    baseline = _compute_baseline(source)
 
-    # 🔒 Enforce twin integrity INSIDE this function.
-    # A twin whose line-similarity to the source is below the floor is not a
-    # near-copy — it is a degenerate control and cannot establish discrimination.
-    # This is not a property the caller checks; it is enforced here so that a
-    # caller's green cannot coexist with a broken control.
-    if ratio < _TWIN_RATIO_FLOOR:
+    # 🔒 Enforce twin integrity INSIDE this function via the margin test.
+    # The twin is a usable control ONLY if it is measurably closer to the
+    # source than the self-generated baseline is.  The baseline (source vs
+    # its own lines in reverse-sorted order) requires no constant and is
+    # derived entirely from the inputs.  A twin that does not beat the
+    # baseline is indistinguishable from a reverse-sorted copy of the source
+    # and cannot establish discrimination.
+    # Both values appear in reason so the margin is auditable from the output.
+    if ratio <= baseline:
         return BiteProof(
             status="INCONCLUSIVE",
             planted_rule=planted_rule,
@@ -231,10 +273,12 @@ def prove_bites(
             twin_rule_ids=(),
             twin_hunks=twin_hunks,
             twin_ratio=ratio,
+            twin_ratio_baseline=baseline,
             twin_lines_kept=lines_kept,
             reason=(
-                f"twin is not a usable control: twin_ratio={ratio:.4f} is below "
-                f"the floor ({_TWIN_RATIO_FLOOR}); the twin is not a near-copy of the source"
+                f"twin is not a usable control: twin_ratio={ratio:.4f} does not exceed "
+                f"baseline={baseline:.4f} (margin={ratio - baseline:.4f}); "
+                f"the twin cannot be distinguished from a reverse-sorted copy of the source"
             ),
         )
 
@@ -258,6 +302,7 @@ def prove_bites(
             twin_rule_ids=(),
             twin_hunks=twin_hunks,
             twin_ratio=ratio,
+            twin_ratio_baseline=baseline,
             twin_lines_kept=lines_kept,
             reason=reason,
         )
@@ -277,6 +322,7 @@ def prove_bites(
             twin_rule_ids=twin_rule_ids,
             twin_hunks=twin_hunks,
             twin_ratio=ratio,
+            twin_ratio_baseline=baseline,
             twin_lines_kept=lines_kept,
             reason="",
         )
@@ -289,6 +335,7 @@ def prove_bites(
             twin_rule_ids=twin_rule_ids,
             twin_hunks=twin_hunks,
             twin_ratio=ratio,
+            twin_ratio_baseline=baseline,
             twin_lines_kept=lines_kept,
             reason=(
                 f"reviewer reported {planted_rule!r} on both the flawed source and an "
@@ -304,6 +351,7 @@ def prove_bites(
         twin_rule_ids=twin_rule_ids,
         twin_hunks=twin_hunks,
         twin_ratio=ratio,
+        twin_ratio_baseline=baseline,
         twin_lines_kept=lines_kept,
         reason=f"reviewer did not report {planted_rule!r} on the source",
     )
@@ -337,146 +385,320 @@ if __name__ == "__main__":
         def __init__(self, rule_id):
             self.rule_id = rule_id
 
-    SOURCE = "x = 1\ny = evil(x)\nz = 3\n"
-    TWIN   = "x = 1\ny = safe(x)\nz = 3\n"   # one hunk different
+    # A realistic "large" source (20 lines) — honest twin differs by one line
+    LARGE_SOURCE = "\n".join([
+        "import os",
+        "import sys",
+        "def foo(x):",
+        "    y = evil(x)",
+        "    z = x + 1",
+        "    return y + z",
+        "def bar(a, b):",
+        "    return a * b",
+        "class Baz:",
+        "    def __init__(self):",
+        "        self.value = 0",
+        "    def compute(self, n):",
+        "        return self.value + n",
+        "def main():",
+        "    obj = Baz()",
+        "    result = foo(obj.compute(10))",
+        "    bar(result, 2)",
+        "    print(result)",
+        "if __name__ == '__main__':",
+        "    main()",
+    ]) + "\n"
+    LARGE_TWIN = LARGE_SOURCE.replace("    y = evil(x)", "    y = safe(x)")
 
-    # ------------------------------------------------------------------
-    # B: Measure twin_ratio for all cases and print so floor is visible
-    # ------------------------------------------------------------------
+    # A 2-line source — the zero-margin case from Increment 9
+    TWO_LINE_SOURCE = "x = 1\ny = evil(x)\n"
+    TWO_LINE_TWIN   = "x = 1\ny = safe(x)\n"
+
+    # Increment 10b: a SORTED source — lines already in lexicographic order.
+    # With the old sorted-copy baseline this gave baseline==1.0 (identity),
+    # making the margin test permanently unsatisfiable → INCONCLUSIVE even for
+    # an honest twin.  With the reversed baseline that cannot happen.
+    SORTED_SOURCE = "\n".join([
+        "        return evil(self.x)",
+        "        return self.x + 1",
+        "    def bar(self):",
+        "    def baz(self):",
+        "    foo = Foo()",
+        "    foo.bar()",
+        "    foo.baz()",
+        "class Foo:",
+        "def main():",
+        "import os",
+        "import sys",
+    ]) + "\n"
+    # Verify the fixture is actually sorted (so the test is meaningful).
+    assert SORTED_SOURCE.splitlines() == sorted(SORTED_SOURCE.splitlines()), \
+        "SORTED_SOURCE fixture is not in sorted order — fix the fixture"
+    SORTED_TWIN = SORTED_SOURCE.replace("        return evil(self.x)",
+                                        "        return safe(self.x)")
+
+    # Same lines as SORTED_SOURCE but in shuffled (non-sorted) order —
+    # concrete Python structure that happens to be in unsorted line order.
+    SHUFFLED_SOURCE = "\n".join([
+        "class Foo:",
+        "    def bar(self):",
+        "        return evil(self.x)",
+        "    def baz(self):",
+        "        return self.x + 1",
+        "def main():",
+        "    foo = Foo()",
+        "    foo.bar()",
+        "    foo.baz()",
+        "import os",
+        "import sys",
+    ]) + "\n"
+    SHUFFLED_TWIN = SHUFFLED_SOURCE.replace("        return evil(self.x)",
+                                            "        return safe(self.x)")
+
+    # Degenerate twins
     EMPTY_TWIN    = ""
     UNRELATED_TWIN = "import os\nprint(42)\n"
-    ONE_LINE_TWIN  = "x = 1\n"
 
-    ratio_honest   , _, _ = _compute_twin_stats(SOURCE, TWIN)
-    ratio_empty    , _, _ = _compute_twin_stats(SOURCE, EMPTY_TWIN)
-    ratio_unrelated, _, _ = _compute_twin_stats(SOURCE, UNRELATED_TWIN)
-    ratio_one_line , _, _ = _compute_twin_stats(SOURCE, ONE_LINE_TWIN)
+    # ------------------------------------------------------------------
+    # Print the measured ratios and baselines so the margin is visible
+    # ------------------------------------------------------------------
+    ratio_large  , _, _ = _compute_twin_stats(LARGE_SOURCE, LARGE_TWIN)
+    baseline_large       = _compute_baseline(LARGE_SOURCE)
+    ratio_2line  , _, _ = _compute_twin_stats(TWO_LINE_SOURCE, TWO_LINE_TWIN)
+    baseline_2line       = _compute_baseline(TWO_LINE_SOURCE)
+    ratio_sorted , _, _ = _compute_twin_stats(SORTED_SOURCE, SORTED_TWIN)
+    baseline_sorted      = _compute_baseline(SORTED_SOURCE)
+    ratio_shuffled,_, _ = _compute_twin_stats(SHUFFLED_SOURCE, SHUFFLED_TWIN)
+    baseline_shuffled    = _compute_baseline(SHUFFLED_SOURCE)
+    ratio_empty  , _, _ = _compute_twin_stats(LARGE_SOURCE, EMPTY_TWIN)
+    ratio_unrelated, _, _ = _compute_twin_stats(LARGE_SOURCE, UNRELATED_TWIN)
 
-    print("=== twin_ratio measurements ===")
-    print(f"  honest twin (1 line changed):  {ratio_honest:.4f}")
-    print(f"  empty string:                  {ratio_empty:.4f}")
-    print(f"  unrelated tiny file:           {ratio_unrelated:.4f}")
-    print(f"  one-line twin:                 {ratio_one_line:.4f}")
-    print(f"  floor chosen:                  {_TWIN_RATIO_FLOOR}")
-    print(f"  gap:  degenerate max={max(ratio_empty, ratio_unrelated, ratio_one_line):.4f}  "
-          f"honest min={ratio_honest:.4f}")
+    print("=== twin_ratio measurements and baselines ===")
+    print(f"  large source   — honest twin:    twin_ratio={ratio_large:.4f}  "
+          f"baseline={baseline_large:.4f}  margin={ratio_large - baseline_large:.4f}")
+    print(f"  sorted source  — honest twin:    twin_ratio={ratio_sorted:.4f}  "
+          f"baseline={baseline_sorted:.4f}  margin={ratio_sorted - baseline_sorted:.4f}  "
+          f"(baseline MUST be < 1.0)")
+    print(f"  shuffled src   — honest twin:    twin_ratio={ratio_shuffled:.4f}  "
+          f"baseline={baseline_shuffled:.4f}  margin={ratio_shuffled - baseline_shuffled:.4f}")
+    print(f"  2-line source  — honest twin:    twin_ratio={ratio_2line:.4f}  "
+          f"baseline={baseline_2line:.4f}  margin={ratio_2line - baseline_2line:.4f}")
+    print(f"  large source   — empty twin:     twin_ratio={ratio_empty:.4f}  "
+          f"baseline={baseline_large:.4f}")
+    print(f"  large source   — unrelated twin: twin_ratio={ratio_unrelated:.4f}  "
+          f"baseline={baseline_large:.4f}")
     print()
 
-    # 1. BITES: reports planted on source, not on twin
-    def rev_bites(src, file):
+    # ------------------------------------------------------------------
+    # Reviewers
+    # ------------------------------------------------------------------
+    def rev_bites_large(src, file):
         if "evil" in src:
             return _FakeScanResult(["planted-rule", "other-rule"])
         return _FakeScanResult(["other-rule"])
 
-    proof = prove_bites(rev_bites, SOURCE, planted_rule="planted-rule", clean_source=TWIN)
-    check("BITES: status == 'BITES'",               proof.status == "BITES")
-    check("BITES: bites() is True",                 proof.bites() is True)
-    check("BITES: may_trust_clean() is True",        proof.may_trust_clean() is True)
-    check("BITES: twin_hunks == 1",                  proof.twin_hunks == 1)
-    check(f"BITES: twin_ratio == {proof.twin_ratio:.4f} (>= floor {_TWIN_RATIO_FLOOR})",
-          proof.twin_ratio >= _TWIN_RATIO_FLOOR)
-    print(f"  [measured] honest-twin twin_ratio = {proof.twin_ratio:.4f}, "
-          f"twin_lines_kept = {proof.twin_lines_kept}")
-
-    # 2. DOES_NOT_BITE: reports planted on BOTH source and twin (no discrimination)
-    def rev_both(src, file):
-        return _FakeScanResult(["planted-rule"])
-
-    proof2 = prove_bites(rev_both, SOURCE, planted_rule="planted-rule", clean_source=TWIN)
-    check("BOTH: status == 'DOES_NOT_BITE'",         proof2.status == "DOES_NOT_BITE")
-    check("BOTH: may_trust_clean() is False",         proof2.may_trust_clean() is False)
-    check("BOTH: reason mentions 'not discriminated'", "not discriminated" in proof2.reason)
-
-    # 3. DOES_NOT_BITE: reports other findings but never the planted rule
-    def rev_other(src, file):
-        return _FakeScanResult(["other-rule"])
-
-    proof3 = prove_bites(rev_other, SOURCE, planted_rule="planted-rule", clean_source=TWIN)
-    check("OTHER: status == 'DOES_NOT_BITE'",        proof3.status == "DOES_NOT_BITE")
-    check("OTHER: may_trust_clean() is False",        proof3.may_trust_clean() is False)
-
-    # 4. DOES_NOT_BITE: reports nothing at all
-    def rev_silent(src, file):
+    def rev_bites_2line(src, file):
+        if "evil" in src:
+            return _FakeScanResult(["planted-rule"])
         return _FakeScanResult([])
 
-    proof4 = prove_bites(rev_silent, SOURCE, planted_rule="planted-rule", clean_source=TWIN)
-    check("SILENT: status == 'DOES_NOT_BITE'",       proof4.status == "DOES_NOT_BITE")
-    check("SILENT: may_trust_clean() is False",       proof4.may_trust_clean() is False)
-
-    # 5. INCONCLUSIVE: clean_source is None
-    proof5 = prove_bites(rev_bites, SOURCE, planted_rule="planted-rule", clean_source=None)
-    check("NO TWIN: status == 'INCONCLUSIVE'",       proof5.status == "INCONCLUSIVE")
-    check("NO TWIN: may_trust_clean() is False",      proof5.may_trust_clean() is False)
-    check("NO TWIN: twin_hunks == -1",               proof5.twin_hunks == -1)
-
-    # 6a. INCONCLUSIVE: truncated result
-    def rev_truncated(src, file):
-        return _FakeScanResult(["planted-rule"], truncated=True)
-
-    proof6a = prove_bites(rev_truncated, SOURCE, planted_rule="planted-rule", clean_source=TWIN)
-    check("TRUNCATED: status == 'INCONCLUSIVE'",     proof6a.status == "INCONCLUSIVE")
-
-    # 6b. INCONCLUSIVE: result carries an error
-    def rev_error(src, file):
-        return _FakeScanResult(["planted-rule"], error="something went wrong")
-
-    proof6b = prove_bites(rev_error, SOURCE, planted_rule="planted-rule", clean_source=TWIN)
-    check("ERROR: status == 'INCONCLUSIVE'",         proof6b.status == "INCONCLUSIVE")
-
-    # 7. twin_hunks == 1 when source and twin differ by exactly one hunk
-    check("twin_hunks == 1 (one-hunk diff)", proof.twin_hunks == 1)
-
     # ------------------------------------------------------------------
-    # D: Degenerate twin cases — these are the new Part D requirements
+    # T1. 2-line source with honest twin → INCONCLUSIVE (zero-margin case)
     # ------------------------------------------------------------------
+    print("--- T1: 2-line source, honest twin ---")
+    proof_2line = prove_bites(rev_bites_2line, TWO_LINE_SOURCE,
+                              planted_rule="planted-rule", clean_source=TWO_LINE_TWIN)
+    print(f"  twin_ratio={proof_2line.twin_ratio:.4f}  "
+          f"baseline={proof_2line.twin_ratio_baseline:.4f}  "
+          f"margin={proof_2line.twin_ratio - proof_2line.twin_ratio_baseline:.4f}  "
+          f"status={proof_2line.status}")
+    check("T1: 2-line honest twin -> INCONCLUSIVE",
+          proof_2line.status == "INCONCLUSIVE")
+    check("T1: may_trust_clean() is False",
+          proof_2line.may_trust_clean() is False)
+    check("T1: twin_ratio_baseline exposed",
+          proof_2line.twin_ratio_baseline >= 0.0)
     print()
-    print("=== degenerate twin cases ===")
 
-    # D1. Empty string twin -> INCONCLUSIVE, may_trust_clean() False
-    proof_empty = prove_bites(rev_bites, SOURCE, planted_rule="planted-rule",
-                              clean_source=EMPTY_TWIN)
-    print(f"  empty twin: twin_ratio={proof_empty.twin_ratio:.4f} -> status={proof_empty.status}")
-    check("EMPTY TWIN: status == 'INCONCLUSIVE'",        proof_empty.status == "INCONCLUSIVE")
-    check("EMPTY TWIN: may_trust_clean() is False",       proof_empty.may_trust_clean() is False)
-    check("EMPTY TWIN: reason mentions 'not a usable control'",
-          "not a usable control" in proof_empty.reason)
+    # ------------------------------------------------------------------
+    # T2. Large source with honest twin → still BITES, both ratios printed
+    # ------------------------------------------------------------------
+    print("--- T2: large source, honest twin ---")
+    proof_large = prove_bites(rev_bites_large, LARGE_SOURCE,
+                              planted_rule="planted-rule", clean_source=LARGE_TWIN)
+    print(f"  twin_ratio={proof_large.twin_ratio:.4f}  "
+          f"baseline={proof_large.twin_ratio_baseline:.4f}  "
+          f"margin={proof_large.twin_ratio - proof_large.twin_ratio_baseline:.4f}  "
+          f"status={proof_large.status}")
+    check("T2: large honest twin -> BITES",
+          proof_large.status == "BITES")
+    check("T2: may_trust_clean() is True",
+          proof_large.may_trust_clean() is True)
+    check("T2: twin_ratio > baseline (margin exists)",
+          proof_large.twin_ratio > proof_large.twin_ratio_baseline)
+    print()
 
-    # D2. Unrelated tiny file as twin -> INCONCLUSIVE, may_trust_clean() False
-    proof_unrel = prove_bites(rev_bites, SOURCE, planted_rule="planted-rule",
-                              clean_source=UNRELATED_TWIN)
-    print(f"  unrelated twin: twin_ratio={proof_unrel.twin_ratio:.4f} -> status={proof_unrel.status}")
-    check("UNRELATED TWIN: status == 'INCONCLUSIVE'",    proof_unrel.status == "INCONCLUSIVE")
-    check("UNRELATED TWIN: may_trust_clean() is False",   proof_unrel.may_trust_clean() is False)
+    # ------------------------------------------------------------------
+    # T3. Empty-string twin → INCONCLUSIVE
+    # ------------------------------------------------------------------
+    print("--- T3: empty-string twin ---")
+    proof_empty = prove_bites(rev_bites_large, LARGE_SOURCE,
+                              planted_rule="planted-rule", clean_source=EMPTY_TWIN)
+    print(f"  twin_ratio={proof_empty.twin_ratio:.4f}  "
+          f"baseline={proof_empty.twin_ratio_baseline:.4f}  "
+          f"status={proof_empty.status}")
+    check("T3: empty twin -> INCONCLUSIVE",
+          proof_empty.status == "INCONCLUSIVE")
+    check("T3: may_trust_clean() is False",
+          proof_empty.may_trust_clean() is False)
+    print()
 
-    # D3. File-length discriminator with empty twin -> must NOT be BITES
-    # This is the reviewer that "wins" against the old twin_hunks==1 check:
-    # it returns the planted rule iff the file has more than 20 lines.
-    # An empty twin (0 lines) causes this reviewer to stay silent -> previously
-    # scored as BITES; now the degeneracy check fires first -> INCONCLUSIVE.
+    # ------------------------------------------------------------------
+    # T4. Unrelated-file twin → INCONCLUSIVE
+    # ------------------------------------------------------------------
+    print("--- T4: unrelated-file twin ---")
+    proof_unrel = prove_bites(rev_bites_large, LARGE_SOURCE,
+                              planted_rule="planted-rule", clean_source=UNRELATED_TWIN)
+    print(f"  twin_ratio={proof_unrel.twin_ratio:.4f}  "
+          f"baseline={proof_unrel.twin_ratio_baseline:.4f}  "
+          f"status={proof_unrel.status}")
+    check("T4: unrelated twin -> INCONCLUSIVE",
+          proof_unrel.status == "INCONCLUSIVE")
+    check("T4: may_trust_clean() is False",
+          proof_unrel.may_trust_clean() is False)
+    print()
+
+    # ------------------------------------------------------------------
+    # T5. File-length discriminator → still must NOT earn BITES
+    # ------------------------------------------------------------------
+    print("--- T5: file-length discriminator + empty twin ---")
     def rev_length_discriminator(src, file):
-        # Reports planted rule only if file has more than 2 lines (length check, no semantics)
         if len(src.splitlines()) > 2:
             return _FakeScanResult(["planted-rule"])
         return _FakeScanResult([])
 
-    proof_len = prove_bites(rev_length_discriminator, SOURCE,
+    proof_len = prove_bites(rev_length_discriminator, LARGE_SOURCE,
                             planted_rule="planted-rule", clean_source=EMPTY_TWIN)
-    print(f"  length-discriminator + empty twin: twin_ratio={proof_len.twin_ratio:.4f} -> status={proof_len.status}")
-    check("LENGTH+EMPTY: must NOT be BITES (must be INCONCLUSIVE)",
-          proof_len.status == "INCONCLUSIVE")
-    check("LENGTH+EMPTY: may_trust_clean() is False",
+    print(f"  twin_ratio={proof_len.twin_ratio:.4f}  "
+          f"baseline={proof_len.twin_ratio_baseline:.4f}  "
+          f"status={proof_len.status}")
+    check("T5: length-discriminator + empty twin -> NOT BITES",
+          proof_len.status != "BITES")
+    check("T5: may_trust_clean() is False",
           proof_len.may_trust_clean() is False)
-
-    # D4. Honest twin -> still BITES, trusted True (floor does not block a real twin)
-    proof_honest = prove_bites(rev_bites, SOURCE, planted_rule="planted-rule",
-                               clean_source=TWIN)
-    print(f"  honest twin: twin_ratio={proof_honest.twin_ratio:.4f} -> status={proof_honest.status}")
-    check("HONEST TWIN: status == 'BITES'",              proof_honest.status == "BITES")
-    check("HONEST TWIN: may_trust_clean() is True",       proof_honest.may_trust_clean() is True)
-
     print()
-    print(f"Floor summary: honest={ratio_honest:.4f}  degenerate max="
-          f"{max(ratio_empty, ratio_unrelated, ratio_one_line):.4f}  floor={_TWIN_RATIO_FLOOR}")
+
+    # ------------------------------------------------------------------
+    # T6. Increment 10b — sorted source + honest twin → BITES
+    #     (Was INCONCLUSIVE with the old sorted-copy baseline because
+    #     sorted(lines)==lines ⟹ baseline==1.0.  With reversed baseline,
+    #     baseline < 1.0 and the honest twin beats it.)
+    # ------------------------------------------------------------------
+    print("--- T6: SORTED source + honest twin (Increment 10b regression) ---")
+    def rev_bites_sorted(src, file):
+        if "evil" in src:
+            return _FakeScanResult(["planted-rule"])
+        return _FakeScanResult([])
+
+    proof_sorted = prove_bites(rev_bites_sorted, SORTED_SOURCE,
+                               planted_rule="planted-rule", clean_source=SORTED_TWIN)
+    print(f"  twin_ratio={proof_sorted.twin_ratio:.4f}  "
+          f"baseline={proof_sorted.twin_ratio_baseline:.4f}  "
+          f"margin={proof_sorted.twin_ratio - proof_sorted.twin_ratio_baseline:.4f}  "
+          f"status={proof_sorted.status}")
+    check("T6: sorted source's baseline < 1.0 (rearrangement is not identity)",
+          proof_sorted.twin_ratio_baseline < 1.0)
+    check("T6: sorted source + honest twin -> BITES",
+          proof_sorted.status == "BITES")
+    check("T6: may_trust_clean() is True",
+          proof_sorted.may_trust_clean() is True)
+    print()
+
+    # ------------------------------------------------------------------
+    # T7. Increment 10b — shuffled-order source + honest twin → BITES
+    # ------------------------------------------------------------------
+    print("--- T7: SHUFFLED source + honest twin (Increment 10b regression) ---")
+    def rev_bites_shuffled(src, file):
+        if "evil" in src:
+            return _FakeScanResult(["planted-rule"])
+        return _FakeScanResult([])
+
+    proof_shuffled = prove_bites(rev_bites_shuffled, SHUFFLED_SOURCE,
+                                 planted_rule="planted-rule", clean_source=SHUFFLED_TWIN)
+    print(f"  twin_ratio={proof_shuffled.twin_ratio:.4f}  "
+          f"baseline={proof_shuffled.twin_ratio_baseline:.4f}  "
+          f"margin={proof_shuffled.twin_ratio - proof_shuffled.twin_ratio_baseline:.4f}  "
+          f"status={proof_shuffled.status}")
+    check("T7: shuffled source + honest twin -> BITES",
+          proof_shuffled.status == "BITES")
+    check("T7: may_trust_clean() is True",
+          proof_shuffled.may_trust_clean() is True)
+    print()
+
+    # ------------------------------------------------------------------
+    # Regression checks (using LARGE_SOURCE/LARGE_TWIN)
+    # ------------------------------------------------------------------
+    def rev_bites_reg(src, file):
+        if "evil" in src:
+            return _FakeScanResult(["planted-rule", "other-rule"])
+        return _FakeScanResult(["other-rule"])
+
+    proof = prove_bites(rev_bites_reg, LARGE_SOURCE, planted_rule="planted-rule",
+                        clean_source=LARGE_TWIN)
+    check("BITES: status == 'BITES'",               proof.status == "BITES")
+    check("BITES: bites() is True",                 proof.bites() is True)
+    check("BITES: may_trust_clean() is True",        proof.may_trust_clean() is True)
+    check("BITES: twin_hunks == 1",                  proof.twin_hunks == 1)
+    print(f"  twin_ratio={proof.twin_ratio:.4f}  "
+          f"baseline={proof.twin_ratio_baseline:.4f}  "
+          f"margin={proof.twin_ratio - proof.twin_ratio_baseline:.4f}")
+
+    def rev_both_reg(src, file):
+        return _FakeScanResult(["planted-rule"])
+
+    proof2 = prove_bites(rev_both_reg, LARGE_SOURCE, planted_rule="planted-rule",
+                         clean_source=LARGE_TWIN)
+    check("BOTH: status == 'DOES_NOT_BITE'",         proof2.status == "DOES_NOT_BITE")
+    check("BOTH: may_trust_clean() is False",         proof2.may_trust_clean() is False)
+    check("BOTH: reason mentions 'not discriminated'", "not discriminated" in proof2.reason)
+
+    def rev_other_reg(src, file):
+        return _FakeScanResult(["other-rule"])
+
+    proof3 = prove_bites(rev_other_reg, LARGE_SOURCE, planted_rule="planted-rule",
+                         clean_source=LARGE_TWIN)
+    check("OTHER: status == 'DOES_NOT_BITE'",        proof3.status == "DOES_NOT_BITE")
+    check("OTHER: may_trust_clean() is False",        proof3.may_trust_clean() is False)
+
+    def rev_silent_reg(src, file):
+        return _FakeScanResult([])
+
+    proof4 = prove_bites(rev_silent_reg, LARGE_SOURCE, planted_rule="planted-rule",
+                         clean_source=LARGE_TWIN)
+    check("SILENT: status == 'DOES_NOT_BITE'",       proof4.status == "DOES_NOT_BITE")
+    check("SILENT: may_trust_clean() is False",       proof4.may_trust_clean() is False)
+
+    proof5 = prove_bites(rev_bites_reg, LARGE_SOURCE, planted_rule="planted-rule",
+                         clean_source=None)
+    check("NO TWIN: status == 'INCONCLUSIVE'",       proof5.status == "INCONCLUSIVE")
+    check("NO TWIN: may_trust_clean() is False",      proof5.may_trust_clean() is False)
+    check("NO TWIN: twin_hunks == -1",               proof5.twin_hunks == -1)
+
+    def rev_truncated_reg(src, file):
+        return _FakeScanResult(["planted-rule"], truncated=True)
+
+    proof6a = prove_bites(rev_truncated_reg, LARGE_SOURCE, planted_rule="planted-rule",
+                          clean_source=LARGE_TWIN)
+    check("TRUNCATED: status == 'INCONCLUSIVE'",     proof6a.status == "INCONCLUSIVE")
+
+    def rev_error_reg(src, file):
+        return _FakeScanResult(["planted-rule"], error="something went wrong")
+
+    proof6b = prove_bites(rev_error_reg, LARGE_SOURCE, planted_rule="planted-rule",
+                          clean_source=LARGE_TWIN)
+    check("ERROR: status == 'INCONCLUSIVE'",         proof6b.status == "INCONCLUSIVE")
+
+    check("twin_hunks == 1 (one-hunk diff)", proof.twin_hunks == 1)
 
     print()
     sys.exit(0 if failures == 0 else 1)

@@ -7,11 +7,145 @@ honest record of **what was asked for**, increment by increment, in order.
 context: they describe interfaces that already exist under `src/`, and later modules should
 conform to those rather than invent their own.
 
-Increment 9 is currently ACTIVE.
+Increment 10b is currently ACTIVE.
 
 ---
 
-# ⬅ ACTIVE — Increment 9: the twin's integrity must be ENFORCED, not delegated
+# ⬅ ACTIVE — Increment 10b: the baseline's rearrangement must not be able to be the identity
+
+## The defect, measured
+
+Increment 10's baseline compares `source` against its own lines **sorted lexicographically**. That
+rearrangement is **the identity whenever the source is already in sorted order.** Measured:
+
+| source | baseline | `twin_ratio` | verdict |
+|---|---|---|---|
+| lines already in sorted order | **1.0000** | 0.9750 | **INCONCLUSIVE** |
+| same lines, shuffled order | 0.0750 | 0.9750 | **BITES** |
+
+`twin_ratio > baseline` is therefore **unsatisfiable** for any sorted source, and the module refuses
+**every** reviewer permanently — **including a perfect one.** Measured at 5, 50 and 200 lines:
+baseline **1.0000** in all three. **A sorted import list is enough.** This is not a small-file edge
+case; it is any file whose lines happen to be in order.
+
+⚠ **The direction matters: this is a FALSE NEGATIVE — it weakens the proof and turns away a correct
+reviewer.** It is the failure mode the increment exists to prevent, arriving from the other side.
+
+🔒 **And all of the module's own tests passed, both times.** The suite uses unsorted fixtures; the
+property lives on the sorted axis. **A green suite over a permanent refusal.**
+
+## The fix
+
+**A rearrangement that can be the identity is not a rearrangement.**
+
+1. The baseline's rearrangement must **not be able to equal the source's own order** for any source
+   with two or more distinct lines. Reverse, rotate, or shuffle with a fixed seed — your choice —
+   **but state why it cannot be the identity**, and **assert it in the self-test**: for a **sorted**
+   source, `baseline < 1.0`.
+2. Keep it self-generated and deterministic (same inputs → same answer).
+3. Keep exposing both values and printing them.
+
+⚠ **Do not fix this by special-casing sorted input** — that is the defect wearing a condition. **Fix
+the rearrangement.**
+
+## Regression test (required — this is the point of the increment)
+
+- a **sorted** source with an honest twin → **`BITES`**, trusted True. *(Currently `INCONCLUSIVE`.)*
+- a **shuffled-order** source with an honest twin → still `BITES`
+- **a sorted source's baseline `< 1.0`** — asserted directly, so the identity-collapse is caught
+  even if some other case masks it
+- empty-string twin → `INCONCLUSIVE`; unrelated twin → `INCONCLUSIVE`; length discriminator → not `BITES`
+- **the 2-line case is expected to remain `INCONCLUSIVE`** — that was increment 10's correct result
+  and it must not regress back to acceptance
+
+## THE PROOF OBLIGATION
+
+1. `python tests/arms.py src` → all PASS, exit 0. **ARM-4 adds the sorted-source case** so the arm
+   itself can fail on this.
+2. **A mutant that restores the sorted-copy baseline** → **ARM-4 must FAIL.** Declare it in that
+   directory's `MUTANT.json` and verify the mutation is present in the copy before running.
+3. Report every run with its exit code, and **print the sorted-source baseline**.
+
+## Acceptance
+
+- `python src/prove_bites.py` exits 0 and **spends nothing**
+- `python tests/arms.py src` exits **0**; the restored-baseline mutant → **non-zero**
+- no constant, and **no rearrangement that can be the identity**
+
+---
+
+# Increment 10: the twin's usability is a MARGIN, not a threshold — ⚠ DO NOT SUBMIT AS-IS
+
+## Why — the floor we chose still has a zero-margin acceptance
+
+`prove_bites` currently rejects a degenerate twin by comparing `twin_ratio` against a **fixed floor**.
+Measured today, honest-twin ratios by source size: **2-line 0.5000**, 3-line 0.6667, 5-line 0.8000,
+10-line 0.8000 — against a floor of **0.5**.
+
+So a **2-line** source's honest twin sits **exactly at the floor** and is accepted by a margin of
+**zero**, and any twin engineered to score exactly the floor is accepted as a usable control.
+
+⚠ **A fixed floor must be calibrated, defended, and re-calibrated whenever the corpus changes.** It
+was measured, not guessed — but a constant is still a number someone has to maintain.
+
+## 🔒 The fix: compare against a SELF-GENERATED baseline, so there is nothing to tune
+
+Replace the fixed floor with a **relative** test:
+
+1. Compute `twin_ratio = similarity(source, clean_source)` as now.
+2. Compute a **baseline** from the data at hand — e.g. the similarity between `source` and a
+   **shuffled copy of itself**, or against an unrelated text of matched length. **It must be
+   generated from the inputs, deterministic (so the same inputs give the same answer, and a re-run
+   reproduces it), and require no constant.**
+3. **The twin is a usable control only if it is measurably closer to the source than the baseline
+   is.** If it is not, return **`INCONCLUSIVE`** — never `BITES`.
+4. **Expose BOTH values** on `BiteProof` (e.g. `twin_ratio` and `twin_ratio_baseline`), and put both
+   numbers in the `reason` and in the self-test output.
+
+🔒 **Print the two values you compared, not just the verdict.** *A margin you cannot see is a
+threshold you cannot audit.*
+
+⚠ **Expect tiny sources to become `INCONCLUSIVE`, and that is correct rather than a regression.** On
+a 2-line file the similarity metric cannot distinguish a genuine near-copy from coincidence. **The
+honest verdict there is "this control cannot be established", not a zero-margin acceptance.** The
+demo target is a real file of hundreds of lines where the honest twin measures 0.95+; the margin
+exists for the small-source case, which is where the zero-margin acceptance lives.
+
+⚠ **Do NOT reintroduce a constant** — including a "small" one, a minimum-margin epsilon, or a
+size cutoff below which the check is skipped. **Skipping the check for small sources is the defect
+wearing a size condition.** If a form genuinely cannot work without a constant, say so and stop
+rather than shipping one quietly.
+
+## Self-test (required)
+
+`if __name__ == "__main__":`, fake reviewers only, **no spend**. Add:
+
+- a **2-line** source with an honest twin → `INCONCLUSIVE` (the zero-margin case, now refused)
+- a **large** source with an honest twin → still `BITES`, trusted True, **with both ratios printed**
+- empty-string twin → `INCONCLUSIVE`; unrelated-file twin → `INCONCLUSIVE`
+- the **file-length discriminator** → still must NOT earn `BITES`
+- **print every `twin_ratio` and its baseline** so the separation is visible in the output
+
+## THE PROOF OBLIGATION
+
+1. **`tests/arms.py src`** → all arms PASS, exit 0. **ARM-4 keeps asserting** a degenerate twin →
+   `INCONCLUSIVE`, and **adds**: a **2-line** source with an honest twin → `INCONCLUSIVE`.
+2. **A mutant that removes the margin comparison** (so any twin is accepted as a control) →
+   **ARM-4 must FAIL.** Name the mutation, verify it is present in the copy, and declare it in that
+   directory's `MUTANT.json` — **a mutant with no declaration is refused by the harness, and a
+   mutant you did not verify landed is a mutant you did not run.**
+3. Report every run verbatim with its exit code, and **state the measured ratios and the baseline
+   you compare against.**
+
+## Acceptance
+
+- `python src/prove_bites.py` exits 0 and **spends nothing**
+- `python tests/arms.py src` exits **0**; the margin mutant → **non-zero**
+- Standard library only; no constant floor remains
+
+---
+
+# Increment 9: the twin's integrity must be ENFORCED, not delegated — ✅ DONE
 
 ## The defect, measured against the built module
 
@@ -100,7 +234,7 @@ away. Give the twin its own label (`f"{file}.twin"` is fine).
 
 ---
 
-# Increment 10 (NEXT, not yet active): `src/mcp_server.py`
+# Increment 11 (NEXT, not yet active): `src/mcp_server.py`
 
 The brief below is written and ready; **it is not the current task.** Full text retained.
 

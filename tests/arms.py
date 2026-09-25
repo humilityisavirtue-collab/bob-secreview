@@ -580,7 +580,8 @@ def arm3(review_path: str) -> bool:
 
 def arm4(prove_bites_path: str) -> bool:
     """ARM-4 — prove_bites discriminates correctly; may_trust_clean() is False for
-    every status except 'BITES'.
+    every status except 'BITES'.  twin_ratio_baseline is exposed on every proof that
+    has a twin.
 
     Uses fake reviewers only.  No real calls, no real spending.
     """
@@ -614,34 +615,108 @@ def arm4(prove_bites_path: str) -> bool:
         def __init__(self, rid):
             self.rule_id = rid
 
-    SOURCE = "x = evil()\ny = 1\n"
-    TWIN   = "x = safe()\ny = 1\n"  # one hunk different
+    # A "large" source (20 lines, non-trivially sorted) used for BITES cases.
+    # The lines are NOT in alphabetical order, so reversed(lines) != lines and
+    # the self-generated baseline is well below 1.0, allowing an honest
+    # one-line-changed twin to beat it with a clear margin.
+    LARGE_SOURCE = "\n".join([
+        "import os",
+        "import sys",
+        "def foo(x):",
+        "    y = evil(x)",
+        "    z = x + 1",
+        "    return y + z",
+        "def bar(a, b):",
+        "    return a * b",
+        "class Baz:",
+        "    def __init__(self):",
+        "        self.value = 0",
+        "    def compute(self, n):",
+        "        return self.value + n",
+        "def main():",
+        "    obj = Baz()",
+        "    result = foo(obj.compute(10))",
+        "    bar(result, 2)",
+        "    print(result)",
+        "if __name__ == '__main__':",
+        "    main()",
+    ]) + "\n"
+    LARGE_TWIN = LARGE_SOURCE.replace("    y = evil(x)", "    y = safe(x)")
+
+    # A 2-line source — lines are alphabetically ordered, so sorted(lines)==lines,
+    # but with the reversed-baseline the ratio is not 1.0 (reversed != original
+    # for two distinct lines), so this correctly yields INCONCLUSIVE because the
+    # honest twin's ratio does not beat the reversed baseline by a margin.
+    TWO_LINE_SOURCE = "x = 1\ny = evil(x)\n"
+    TWO_LINE_TWIN   = "x = 1\ny = safe(x)\n"
+
+    # Increment 10b: a SORTED source (lines already in lexicographic order).
+    # The OLD sorted-copy baseline gave baseline==1.0 here (identity), turning
+    # every sorted file into a permanent INCONCLUSIVE.  The FIX (reversed
+    # baseline) must give baseline < 1.0 so an honest twin can earn BITES.
+    SORTED_SOURCE_4K = "\n".join([
+        "        return evil(self.x)",
+        "        return self.x + 1",
+        "    def bar(self):",
+        "    def baz(self):",
+        "    foo = Foo()",
+        "    foo.bar()",
+        "    foo.baz()",
+        "class Foo:",
+        "def main():",
+        "import os",
+        "import sys",
+    ]) + "\n"
+    # Fixture guard: the lines must actually be sorted so this test is meaningful.
+    assert SORTED_SOURCE_4K.splitlines() == sorted(SORTED_SOURCE_4K.splitlines()), \
+        "ARM-4 SORTED_SOURCE_4K fixture is not in sorted order"
+    SORTED_TWIN_4K = SORTED_SOURCE_4K.replace(
+        "        return evil(self.x)", "        return safe(self.x)"
+    )
 
     # ------------------------------------------------------------------
-    # 4a. BITES: planted on source, absent on twin
+    # 4a. BITES: planted on source, absent on twin (large source)
     # ------------------------------------------------------------------
     def rev_bites(src, file):
         if "evil" in src:
             return _FakeScanResult(["planted-rule"])
         return _FakeScanResult([])
 
-    proof_bites = prove_bites_fn(rev_bites, SOURCE, planted_rule="planted-rule",
-                                 clean_source=TWIN)
+    proof_bites = prove_bites_fn(rev_bites, LARGE_SOURCE, planted_rule="planted-rule",
+                                 clean_source=LARGE_TWIN)
     if proof_bites.status != "BITES":
-        print(f"FAIL ARM-4/4a: expected BITES, got {proof_bites.status!r}")
+        print(f"FAIL ARM-4/4a: expected BITES, got {proof_bites.status!r} "
+              f"(twin_ratio={getattr(proof_bites, 'twin_ratio', 'N/A'):.4f}, "
+              f"baseline={getattr(proof_bites, 'twin_ratio_baseline', 'N/A'):.4f})")
         return False
     if not proof_bites.may_trust_clean():
         print("FAIL ARM-4/4a: BITES proof has may_trust_clean()==False")
         return False
+    # twin_ratio_baseline must be exposed and < twin_ratio (margin exists)
+    baseline_a = getattr(proof_bites, "twin_ratio_baseline", None)
+    if baseline_a is None:
+        print("FAIL ARM-4/4a: BiteProof has no twin_ratio_baseline field")
+        return False
+    if not (proof_bites.twin_ratio > baseline_a):
+        print(
+            f"FAIL ARM-4/4a: twin_ratio={proof_bites.twin_ratio:.4f} is not > "
+            f"twin_ratio_baseline={baseline_a:.4f}; no margin"
+        )
+        return False
+    print(
+        f"  ARM-4/4a: twin_ratio={proof_bites.twin_ratio:.4f}  "
+        f"baseline={baseline_a:.4f}  "
+        f"margin={proof_bites.twin_ratio - baseline_a:.4f}  status={proof_bites.status}"
+    )
 
     # ------------------------------------------------------------------
-    # 4b. DOES_NOT_BITE: planted on BOTH (no discrimination)
+    # 4b. DOES_NOT_BITE: planted on BOTH (no discrimination, large source)
     # ------------------------------------------------------------------
     def rev_both(src, file):
         return _FakeScanResult(["planted-rule"])
 
-    proof_both = prove_bites_fn(rev_both, SOURCE, planted_rule="planted-rule",
-                                clean_source=TWIN)
+    proof_both = prove_bites_fn(rev_both, LARGE_SOURCE, planted_rule="planted-rule",
+                                clean_source=LARGE_TWIN)
     if proof_both.status != "DOES_NOT_BITE":
         print(f"FAIL ARM-4/4b: expected DOES_NOT_BITE, got {proof_both.status!r}")
         return False
@@ -658,8 +733,8 @@ def arm4(prove_bites_path: str) -> bool:
     def rev_other(src, file):
         return _FakeScanResult(["other-rule"])
 
-    proof_other = prove_bites_fn(rev_other, SOURCE, planted_rule="planted-rule",
-                                 clean_source=TWIN)
+    proof_other = prove_bites_fn(rev_other, LARGE_SOURCE, planted_rule="planted-rule",
+                                 clean_source=LARGE_TWIN)
     if proof_other.status != "DOES_NOT_BITE":
         print(f"FAIL ARM-4/4c: expected DOES_NOT_BITE, got {proof_other.status!r}")
         return False
@@ -673,8 +748,8 @@ def arm4(prove_bites_path: str) -> bool:
     def rev_silent(src, file):
         return _FakeScanResult([])
 
-    proof_silent = prove_bites_fn(rev_silent, SOURCE, planted_rule="planted-rule",
-                                  clean_source=TWIN)
+    proof_silent = prove_bites_fn(rev_silent, LARGE_SOURCE, planted_rule="planted-rule",
+                                  clean_source=LARGE_TWIN)
     if proof_silent.status != "DOES_NOT_BITE":
         print(f"FAIL ARM-4/4d: expected DOES_NOT_BITE, got {proof_silent.status!r}")
         return False
@@ -685,7 +760,7 @@ def arm4(prove_bites_path: str) -> bool:
     # ------------------------------------------------------------------
     # 4e. INCONCLUSIVE: clean_source is None
     # ------------------------------------------------------------------
-    proof_no_twin = prove_bites_fn(rev_bites, SOURCE, planted_rule="planted-rule",
+    proof_no_twin = prove_bites_fn(rev_bites, LARGE_SOURCE, planted_rule="planted-rule",
                                    clean_source=None)
     if proof_no_twin.status != "INCONCLUSIVE":
         print(f"FAIL ARM-4/4e: expected INCONCLUSIVE when clean_source=None, got {proof_no_twin.status!r}")
@@ -700,8 +775,8 @@ def arm4(prove_bites_path: str) -> bool:
     def rev_trunc(src, file):
         return _FakeScanResult(["planted-rule"], truncated=True)
 
-    proof_trunc = prove_bites_fn(rev_trunc, SOURCE, planted_rule="planted-rule",
-                                 clean_source=TWIN)
+    proof_trunc = prove_bites_fn(rev_trunc, LARGE_SOURCE, planted_rule="planted-rule",
+                                 clean_source=LARGE_TWIN)
     if proof_trunc.status != "INCONCLUSIVE":
         print(f"FAIL ARM-4/4f: expected INCONCLUSIVE on truncated, got {proof_trunc.status!r}")
         return False
@@ -715,8 +790,8 @@ def arm4(prove_bites_path: str) -> bool:
     def rev_err(src, file):
         return _FakeScanResult(["planted-rule"], error="simulated error")
 
-    proof_err = prove_bites_fn(rev_err, SOURCE, planted_rule="planted-rule",
-                               clean_source=TWIN)
+    proof_err = prove_bites_fn(rev_err, LARGE_SOURCE, planted_rule="planted-rule",
+                               clean_source=LARGE_TWIN)
     if proof_err.status != "INCONCLUSIVE":
         print(f"FAIL ARM-4/4g: expected INCONCLUSIVE on error result, got {proof_err.status!r}")
         return False
@@ -725,7 +800,7 @@ def arm4(prove_bites_path: str) -> bool:
         return False
 
     # ------------------------------------------------------------------
-    # 4h. twin_hunks == 1 for a single-hunk diff
+    # 4h. twin_hunks == 1 for a single-hunk diff (large source, one line changed)
     # ------------------------------------------------------------------
     if proof_bites.twin_hunks != 1:
         print(f"FAIL ARM-4/4h: expected twin_hunks == 1, got {proof_bites.twin_hunks!r}")
@@ -747,24 +822,22 @@ def arm4(prove_bites_path: str) -> bool:
     # ------------------------------------------------------------------
     # 4j. Degenerate twin: INCONCLUSIVE, may_trust_clean() False
     #
-    # 🔒 This arm enforces that the degeneracy check lives INSIDE the
-    # module, not in a number the caller must remember to inspect.
-    # A degenerate twin must yield INCONCLUSIVE regardless of what the
-    # reviewer says — including a reviewer that would "win" by relying
-    # on a vacuous control.
+    # 🔒 This arm enforces that the margin check lives INSIDE the module.
+    # A twin that does not beat the self-generated baseline must yield
+    # INCONCLUSIVE regardless of what the reviewer says.
     #
-    # Three cases:
-    #   j1 — empty string twin
-    #   j2 — unrelated tiny file as twin
-    #   j3 — file-length discriminator with empty twin (the defect from the
-    #         incident table: a reviewer with no capability earns BITES under
-    #         the old scheme; it must NOT earn BITES here)
+    # Four cases:
+    #   j1 — empty string twin (large source)
+    #   j2 — unrelated tiny file as twin (large source)
+    #   j3 — file-length discriminator with empty twin (must NOT be BITES)
+    #   j4 — 2-line source with honest twin → INCONCLUSIVE (the zero-margin
+    #         case: sorted(lines)==lines so baseline==1.0, no twin can win)
     # ------------------------------------------------------------------
     EMPTY_TWIN_4J    = ""
     UNRELATED_TWIN_4J = "import os\nprint(42)\n"
 
-    # j1: empty string twin
-    proof_empty = prove_bites_fn(rev_bites, SOURCE, planted_rule="planted-rule",
+    # j1: empty string twin (large source)
+    proof_empty = prove_bites_fn(rev_bites, LARGE_SOURCE, planted_rule="planted-rule",
                                  clean_source=EMPTY_TWIN_4J)
     if proof_empty.status != "INCONCLUSIVE":
         print(
@@ -780,11 +853,12 @@ def arm4(prove_bites_path: str) -> bool:
         return False
     print(
         f"  ARM-4/4j1: empty twin -> status={proof_empty.status}, "
-        f"twin_ratio={getattr(proof_empty, 'twin_ratio', 'N/A')}"
+        f"twin_ratio={getattr(proof_empty, 'twin_ratio', 'N/A'):.4f}, "
+        f"baseline={getattr(proof_empty, 'twin_ratio_baseline', 'N/A'):.4f}"
     )
 
-    # j2: unrelated tiny file as twin
-    proof_unrel = prove_bites_fn(rev_bites, SOURCE, planted_rule="planted-rule",
+    # j2: unrelated tiny file as twin (large source)
+    proof_unrel = prove_bites_fn(rev_bites, LARGE_SOURCE, planted_rule="planted-rule",
                                  clean_source=UNRELATED_TWIN_4J)
     if proof_unrel.status != "INCONCLUSIVE":
         print(
@@ -800,20 +874,17 @@ def arm4(prove_bites_path: str) -> bool:
         return False
     print(
         f"  ARM-4/4j2: unrelated twin -> status={proof_unrel.status}, "
-        f"twin_ratio={getattr(proof_unrel, 'twin_ratio', 'N/A')}"
+        f"twin_ratio={getattr(proof_unrel, 'twin_ratio', 'N/A'):.4f}, "
+        f"baseline={getattr(proof_unrel, 'twin_ratio_baseline', 'N/A'):.4f}"
     )
 
     # j3: file-length discriminator with empty twin — must NOT be BITES
-    # This is the reviewer from the incident table that currently wins:
-    # it returns the planted rule iff source has more than N lines.
-    # With an empty twin it stays silent -> twin_hunks==1 -> old scheme: BITES.
-    # The new scheme must return INCONCLUSIVE because the twin is degenerate.
     def rev_len_disc(src, file):
         if len(src.splitlines()) > 1:
             return _FakeScanResult(["planted-rule"])
         return _FakeScanResult([])
 
-    proof_len = prove_bites_fn(rev_len_disc, SOURCE, planted_rule="planted-rule",
+    proof_len = prove_bites_fn(rev_len_disc, LARGE_SOURCE, planted_rule="planted-rule",
                                clean_source=EMPTY_TWIN_4J)
     if proof_len.status == "BITES":
         print(
@@ -831,6 +902,89 @@ def arm4(prove_bites_path: str) -> bool:
         f"  ARM-4/4j3: length-discriminator + empty twin -> status={proof_len.status} "
         f"(not BITES, may_trust_clean=False)"
     )
+
+    # j4: 2-line source with honest twin → INCONCLUSIVE
+    # The 2-line source "x = 1\ny = evil(x)\n" has lines in alphabetical order.
+    # With the reversed baseline, the baseline is NOT 1.0 (reversing two distinct
+    # lines does not produce the identity), but the honest twin's ratio still does
+    # not beat it by a margin: both lines change the same relative position, so the
+    # twin ratio is also below the baseline.  The result is INCONCLUSIVE — the
+    # zero-margin case that Increment 10 correctly refuses, and that must not regress.
+    proof_2line = prove_bites_fn(rev_bites, TWO_LINE_SOURCE, planted_rule="planted-rule",
+                                 clean_source=TWO_LINE_TWIN)
+    if proof_2line.status != "INCONCLUSIVE":
+        print(
+            f"FAIL ARM-4/4j4: 2-line source with honest twin expected INCONCLUSIVE, "
+            f"got {proof_2line.status!r} "
+            f"(twin_ratio={getattr(proof_2line, 'twin_ratio', 'N/A'):.4f}, "
+            f"baseline={getattr(proof_2line, 'twin_ratio_baseline', 'N/A'):.4f})"
+        )
+        return False
+    if proof_2line.may_trust_clean() is not False:
+        print(
+            f"FAIL ARM-4/4j4: 2-line honest twin has "
+            f"may_trust_clean()=={proof_2line.may_trust_clean()!r}; expected False"
+        )
+        return False
+    print(
+        f"  ARM-4/4j4: 2-line source + honest twin -> status={proof_2line.status}, "
+        f"twin_ratio={getattr(proof_2line, 'twin_ratio', 'N/A'):.4f}, "
+        f"baseline={getattr(proof_2line, 'twin_ratio_baseline', 'N/A'):.4f} "
+        f"(zero-margin case, correctly refused)"
+    )
+
+    # ------------------------------------------------------------------
+    # 4k. Increment 10b — sorted source + honest twin → BITES
+    #
+    # The OLD sorted-copy baseline was the identity for sorted sources
+    # (baseline == 1.0), making the margin test permanently unsatisfiable and
+    # every sorted file a permanent INCONCLUSIVE.  The FIX (reversed baseline)
+    # gives baseline < 1.0, letting an honest twin earn BITES.
+    #
+    # k1: baseline < 1.0 — the direct assertion that catches identity-collapse
+    # k2: sorted source + honest twin → BITES  (was INCONCLUSIVE with old code)
+    # ------------------------------------------------------------------
+    def rev_bites_sorted(src, file):
+        if "evil" in src:
+            return _FakeScanResult(["planted-rule"])
+        return _FakeScanResult([])
+
+    proof_sorted = prove_bites_fn(rev_bites_sorted, SORTED_SOURCE_4K,
+                                  planted_rule="planted-rule",
+                                  clean_source=SORTED_TWIN_4K)
+    sorted_baseline = getattr(proof_sorted, "twin_ratio_baseline", None)
+    sorted_ratio    = getattr(proof_sorted, "twin_ratio", None)
+    print(
+        f"  ARM-4/4k: sorted source -> twin_ratio={sorted_ratio:.4f}  "
+        f"baseline={sorted_baseline:.4f}  "
+        f"margin={sorted_ratio - sorted_baseline:.4f}  "
+        f"status={proof_sorted.status}"
+    )
+
+    # k1: baseline must be strictly less than 1.0 — the rearrangement is not
+    # the identity.  This assertion catches the defect even if k2 masks it.
+    if sorted_baseline is None or sorted_baseline >= 1.0:
+        print(
+            f"FAIL ARM-4/4k1: sorted source's baseline must be < 1.0 "
+            f"(got {sorted_baseline!r}); the rearrangement is the identity "
+            f"— sorted-copy rearrangement has been restored"
+        )
+        return False
+
+    # k2: sorted source + honest twin → BITES
+    if proof_sorted.status != "BITES":
+        print(
+            f"FAIL ARM-4/4k2: sorted source + honest twin expected BITES, "
+            f"got {proof_sorted.status!r} "
+            f"(twin_ratio={sorted_ratio:.4f}, baseline={sorted_baseline:.4f})"
+        )
+        return False
+    if proof_sorted.may_trust_clean() is not True:
+        print(
+            f"FAIL ARM-4/4k2: sorted source BITES proof has "
+            f"may_trust_clean()=={proof_sorted.may_trust_clean()!r}; expected True"
+        )
+        return False
 
     print("PASS ARM-4")
     return True
