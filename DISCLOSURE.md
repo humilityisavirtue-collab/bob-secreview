@@ -60,10 +60,10 @@ store, and its transcript is in `bob_sessions/`.
 the parse-path fix, and `prove_bites.py`. Each is a distinct task with its own transcript,
 and all of them are **inside the exported record**.
 
-**Bob was also the author of the problem analysis.** A High-severity weakness in our
-specification — one we had not identified — was found by Bob while reviewing it, and was
-corrected in this window. That finding is Bob's, not ours, and it is the clearest evidence
-in this submission that Bob did analysis rather than transcription.
+**Bob was also the author of the problem analysis.** A High-severity weakness — one we had
+not identified — was found by Bob while reviewing our work, and was corrected in this
+window. That finding is Bob's, not ours, and it is the clearest evidence in this submission
+that Bob did analysis rather than transcription.
 
 **In-window hand work.** A number of later changes were written directly, in the hackathon
 window, without a Bob session:
