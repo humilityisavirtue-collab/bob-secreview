@@ -32,34 +32,43 @@ def _load_module(name: str, path: str):
     return mod
 
 
-def _resolve(arg: str) -> tuple[str, str, str]:
-    """Return (findings_path, chunk_path, review_path) from a file-or-directory argument."""
+def _resolve(arg: str) -> tuple[str, str, str, str]:
+    """Return (findings_path, chunk_path, review_path, prove_bites_path) from a file-or-directory argument."""
     arg = os.path.abspath(arg)
     if os.path.isdir(arg):
-        findings_path = os.path.join(arg, "findings.py")
-        chunk_path = os.path.join(arg, "chunk.py")
-        review_path = os.path.join(arg, "review.py")
+        findings_path    = os.path.join(arg, "findings.py")
+        chunk_path       = os.path.join(arg, "chunk.py")
+        review_path      = os.path.join(arg, "review.py")
+        prove_bites_path = os.path.join(arg, "prove_bites.py")
     else:
         # A single file was given — derive siblings from the same directory.
         base = os.path.dirname(arg)
         name = os.path.basename(arg)
         if name == "findings.py":
-            findings_path = arg
-            chunk_path = os.path.join(base, "chunk.py")
-            review_path = os.path.join(base, "review.py")
+            findings_path    = arg
+            chunk_path       = os.path.join(base, "chunk.py")
+            review_path      = os.path.join(base, "review.py")
+            prove_bites_path = os.path.join(base, "prove_bites.py")
         elif name == "chunk.py":
-            chunk_path = arg
-            findings_path = os.path.join(base, "findings.py")
-            review_path = os.path.join(base, "review.py")
+            chunk_path       = arg
+            findings_path    = os.path.join(base, "findings.py")
+            review_path      = os.path.join(base, "review.py")
+            prove_bites_path = os.path.join(base, "prove_bites.py")
         elif name == "review.py":
-            review_path = arg
-            findings_path = os.path.join(base, "findings.py")
-            chunk_path = os.path.join(base, "chunk.py")
+            review_path      = arg
+            findings_path    = os.path.join(base, "findings.py")
+            chunk_path       = os.path.join(base, "chunk.py")
+            prove_bites_path = os.path.join(base, "prove_bites.py")
+        elif name.startswith("prove_bites"):
+            prove_bites_path = arg
+            findings_path    = os.path.join(base, "findings.py")
+            chunk_path       = os.path.join(base, "chunk.py")
+            review_path      = os.path.join(base, "review.py")
         else:
             raise ValueError(
-                f"Unrecognised file {arg!r}; expected findings.py, chunk.py, or review.py"
+                f"Unrecognised file {arg!r}; expected findings.py, chunk.py, review.py, or prove_bites.py"
             )
-    return findings_path, chunk_path, review_path
+    return findings_path, chunk_path, review_path, prove_bites_path
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +457,180 @@ def arm3(review_path: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# ARM-4: prove_bites discrimination proof
+# ---------------------------------------------------------------------------
+
+def arm4(prove_bites_path: str) -> bool:
+    """ARM-4 — prove_bites discriminates correctly; may_trust_clean() is False for
+    every status except 'BITES'.
+
+    Uses fake reviewers only.  No real calls, no real spending.
+    """
+    try:
+        pb_mod = _load_module("prove_bites", prove_bites_path)
+    except Exception as exc:
+        print(f"FAIL ARM-4: could not import prove_bites from {prove_bites_path!r}: {exc}")
+        return False
+
+    prove_bites_fn = getattr(pb_mod, "prove_bites", None)
+    BiteProof_cls  = getattr(pb_mod, "BiteProof",   None)
+    if prove_bites_fn is None:
+        print("FAIL ARM-4: prove_bites module has no prove_bites function")
+        return False
+    if BiteProof_cls is None:
+        print("FAIL ARM-4: prove_bites module has no BiteProof class")
+        return False
+
+    # ------------------------------------------------------------------
+    # Fake helpers
+    # ------------------------------------------------------------------
+    class _FakeScanResult:
+        def __init__(self, rule_ids=(), *, truncated=False, error=None):
+            self.findings = [_FakeF(r) for r in rule_ids]
+            self.truncated = truncated
+            self.error = error
+        def may_report_clean(self):
+            return not self.truncated and not self.error
+
+    class _FakeF:
+        def __init__(self, rid):
+            self.rule_id = rid
+
+    SOURCE = "x = evil()\ny = 1\n"
+    TWIN   = "x = safe()\ny = 1\n"  # one hunk different
+
+    # ------------------------------------------------------------------
+    # 4a. BITES: planted on source, absent on twin
+    # ------------------------------------------------------------------
+    def rev_bites(src, file):
+        if "evil" in src:
+            return _FakeScanResult(["planted-rule"])
+        return _FakeScanResult([])
+
+    proof_bites = prove_bites_fn(rev_bites, SOURCE, planted_rule="planted-rule",
+                                 clean_source=TWIN)
+    if proof_bites.status != "BITES":
+        print(f"FAIL ARM-4/4a: expected BITES, got {proof_bites.status!r}")
+        return False
+    if not proof_bites.may_trust_clean():
+        print("FAIL ARM-4/4a: BITES proof has may_trust_clean()==False")
+        return False
+
+    # ------------------------------------------------------------------
+    # 4b. DOES_NOT_BITE: planted on BOTH (no discrimination)
+    # ------------------------------------------------------------------
+    def rev_both(src, file):
+        return _FakeScanResult(["planted-rule"])
+
+    proof_both = prove_bites_fn(rev_both, SOURCE, planted_rule="planted-rule",
+                                clean_source=TWIN)
+    if proof_both.status != "DOES_NOT_BITE":
+        print(f"FAIL ARM-4/4b: expected DOES_NOT_BITE, got {proof_both.status!r}")
+        return False
+    if proof_both.may_trust_clean() is not False:
+        print(f"FAIL ARM-4/4b: DOES_NOT_BITE has may_trust_clean()=={proof_both.may_trust_clean()!r}; expected False")
+        return False
+    if "not discriminated" not in proof_both.reason:
+        print(f"FAIL ARM-4/4b: reason does not mention 'not discriminated': {proof_both.reason!r}")
+        return False
+
+    # ------------------------------------------------------------------
+    # 4c. DOES_NOT_BITE: planted never reported (other findings present)
+    # ------------------------------------------------------------------
+    def rev_other(src, file):
+        return _FakeScanResult(["other-rule"])
+
+    proof_other = prove_bites_fn(rev_other, SOURCE, planted_rule="planted-rule",
+                                 clean_source=TWIN)
+    if proof_other.status != "DOES_NOT_BITE":
+        print(f"FAIL ARM-4/4c: expected DOES_NOT_BITE, got {proof_other.status!r}")
+        return False
+    if proof_other.may_trust_clean() is not False:
+        print(f"FAIL ARM-4/4c: DOES_NOT_BITE has may_trust_clean()=={proof_other.may_trust_clean()!r}")
+        return False
+
+    # ------------------------------------------------------------------
+    # 4d. DOES_NOT_BITE: silent reviewer (no findings at all)
+    # ------------------------------------------------------------------
+    def rev_silent(src, file):
+        return _FakeScanResult([])
+
+    proof_silent = prove_bites_fn(rev_silent, SOURCE, planted_rule="planted-rule",
+                                  clean_source=TWIN)
+    if proof_silent.status != "DOES_NOT_BITE":
+        print(f"FAIL ARM-4/4d: expected DOES_NOT_BITE, got {proof_silent.status!r}")
+        return False
+    if proof_silent.may_trust_clean() is not False:
+        print(f"FAIL ARM-4/4d: DOES_NOT_BITE has may_trust_clean()=={proof_silent.may_trust_clean()!r}")
+        return False
+
+    # ------------------------------------------------------------------
+    # 4e. INCONCLUSIVE: clean_source is None
+    # ------------------------------------------------------------------
+    proof_no_twin = prove_bites_fn(rev_bites, SOURCE, planted_rule="planted-rule",
+                                   clean_source=None)
+    if proof_no_twin.status != "INCONCLUSIVE":
+        print(f"FAIL ARM-4/4e: expected INCONCLUSIVE when clean_source=None, got {proof_no_twin.status!r}")
+        return False
+    if proof_no_twin.may_trust_clean() is not False:
+        print(f"FAIL ARM-4/4e: INCONCLUSIVE has may_trust_clean()=={proof_no_twin.may_trust_clean()!r}")
+        return False
+
+    # ------------------------------------------------------------------
+    # 4f. INCONCLUSIVE: truncated result
+    # ------------------------------------------------------------------
+    def rev_trunc(src, file):
+        return _FakeScanResult(["planted-rule"], truncated=True)
+
+    proof_trunc = prove_bites_fn(rev_trunc, SOURCE, planted_rule="planted-rule",
+                                 clean_source=TWIN)
+    if proof_trunc.status != "INCONCLUSIVE":
+        print(f"FAIL ARM-4/4f: expected INCONCLUSIVE on truncated, got {proof_trunc.status!r}")
+        return False
+    if proof_trunc.may_trust_clean() is not False:
+        print(f"FAIL ARM-4/4f: INCONCLUSIVE has may_trust_clean()=={proof_trunc.may_trust_clean()!r}")
+        return False
+
+    # ------------------------------------------------------------------
+    # 4g. INCONCLUSIVE: result carries an error
+    # ------------------------------------------------------------------
+    def rev_err(src, file):
+        return _FakeScanResult(["planted-rule"], error="simulated error")
+
+    proof_err = prove_bites_fn(rev_err, SOURCE, planted_rule="planted-rule",
+                               clean_source=TWIN)
+    if proof_err.status != "INCONCLUSIVE":
+        print(f"FAIL ARM-4/4g: expected INCONCLUSIVE on error result, got {proof_err.status!r}")
+        return False
+    if proof_err.may_trust_clean() is not False:
+        print(f"FAIL ARM-4/4g: INCONCLUSIVE has may_trust_clean()=={proof_err.may_trust_clean()!r}")
+        return False
+
+    # ------------------------------------------------------------------
+    # 4h. twin_hunks == 1 for a single-hunk diff
+    # ------------------------------------------------------------------
+    if proof_bites.twin_hunks != 1:
+        print(f"FAIL ARM-4/4h: expected twin_hunks == 1, got {proof_bites.twin_hunks!r}")
+        return False
+
+    # ------------------------------------------------------------------
+    # 4i. may_trust_clean() is False for DOES_NOT_BITE and INCONCLUSIVE
+    #     (explicit exhaustive check across all non-BITES statuses)
+    # ------------------------------------------------------------------
+    non_bites = [proof_both, proof_other, proof_silent, proof_no_twin, proof_trunc, proof_err]
+    for p in non_bites:
+        if p.may_trust_clean() is not False:
+            print(
+                f"FAIL ARM-4/4i: proof with status={p.status!r} has "
+                f"may_trust_clean()=={p.may_trust_clean()!r}; expected False"
+            )
+            return False
+
+    print("PASS ARM-4")
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -457,7 +640,7 @@ if __name__ == "__main__":
         sys.exit(2)
 
     try:
-        findings_path, chunk_path, review_path = _resolve(sys.argv[1])
+        findings_path, chunk_path, review_path, prove_bites_path = _resolve(sys.argv[1])
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(2)
@@ -466,6 +649,7 @@ if __name__ == "__main__":
         arm1(findings_path),
         arm2(chunk_path),
         arm3(review_path),
+        arm4(prove_bites_path),
     ]
 
     sys.exit(0 if all(results) else 1)

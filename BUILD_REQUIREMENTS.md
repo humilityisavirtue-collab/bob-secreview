@@ -7,11 +7,123 @@ honest record of **what was asked for**, increment by increment, in order.
 context: they describe interfaces that already exist under `src/`, and later modules should
 conform to those rather than invent their own.
 
-Increment 6 is currently ACTIVE.
+Increment 7 is currently ACTIVE.
 
 ---
 
-# ⬅ ACTIVE — Increment 6: `chunks_reviewed` must mean "we hold its output"
+# ⬅ ACTIVE — Increment 7: `src/prove_bites.py` — the reviewer must DISCRIMINATE
+
+## Why the obvious version of this module is vacuous
+
+The first draft of this brief said: *"BITES — at least one finding has `rule_id == planted_rule`."*
+That is a membership test **on the output**, with **no constraint on the input**. A reviewer that
+ignores `source` entirely and always emits one finding carrying the planted rule passes it, and every
+one of the five arms below would pass too — **five of five**.
+
+The suite varied the **output**; the property is a relation between **input and output**.
+
+So the proof must be one of **discrimination**: the reviewer reports the planted rule on a flawed file
+**and stays silent about it on an otherwise identical, unflawed file.**
+
+## Deliverable — `src/prove_bites.py`
+
+```python
+@dataclass(frozen=True)
+class BiteProof:
+    status: str                        # "BITES" | "DOES_NOT_BITE" | "INCONCLUSIVE"
+    planted_rule: str
+    found_rule_ids: tuple[str, ...]    # rule_ids reported on the SOURCE
+    twin_rule_ids: tuple[str, ...]     # rule_ids reported on the TWIN
+    twin_hunks: int = -1               # how many line groups differ between source and twin
+    reason: str = ""
+
+    def bites(self) -> bool: ...
+    def may_trust_clean(self) -> bool: ...   # True ONLY for "BITES"
+
+def prove_bites(review, source: str, *, planted_rule: str,
+                clean_source: str | None = None, file: str = "<target>") -> BiteProof: ...
+```
+
+`review` is any callable `(source: str, file: str) -> ScanResult`.
+
+## Required behaviour
+
+1. Run `review` on `source`. Collect the `rule_id` of every finding.
+2. **`"BITES"`** — the planted rule **is** reported on `source`, **and is NOT reported on `clean_source`.**
+   Two conditions. Both required.
+3. **`"DOES_NOT_BITE"`** — either the planted rule was not reported on `source`; **or** it was
+   reported on `source` **and also on the twin** — a reviewer that says the same thing about a flawed
+   and an unflawed file **has not discriminated**, and `reason` must say so in those words.
+4. **`"INCONCLUSIVE"`** — the proof could not be established:
+   - `clean_source is None`; **or**
+   - either review is `truncated`, carries an `error`, or `may_report_clean()` is False.
+
+   🔒 **`clean_source is None` must NEVER yield `"BITES"`.** A one-sided proof cannot establish
+   discrimination. **A claim that cannot be falsified is not a proof** — and this module's own
+   philosophy, turned on itself.
+
+   🔒 **`"INCONCLUSIVE"` is not a soft pass, and it is not a failure of the reviewer.** Do not fold
+   it into either other status.
+5. **`may_trust_clean()` is True if and only if `status == "BITES"`.**
+6. **The twin assertion is SCOPED to the planted rule.** The reviewer **may** legitimately report
+   other findings on the twin; that is not a failure. ⚠ A rule of *"must report nothing on the twin"*
+   would call a correct reviewer broken and **manufacture a false `DOES_NOT_BITE`**.
+7. **`twin_hunks`** counts how many groups of lines differ between `source` and `clean_source`.
+   Compute it and expose it. **If the twin differs by more than the planted hunk, the verdict is
+   unattributable** — the module measures every other difference too. The module does **not** change
+   the verdict on this; it **prints/exposes the count**, and the arm asserts it. Say in the docstring
+   that a caller must check it.
+
+## The twin must NOT live in the workspace
+
+🔴 **The twin names the defect by its diff.** Two files in the same tree means `diff` on the pair
+returns the answer key in one command — to the reviewer, to a Bob session, to anyone with the
+workspace. **It is a derivation, not an annotation, so no grep for a defect finds it.**
+
+- `prove_bites` takes `clean_source` as **a string supplied by the caller**, who reads it from
+  **outside the workspace**. Nothing in this repo may contain the real twin.
+- The module must run correctly when the twin is **absent** → `"INCONCLUSIVE"`.
+- **`DISCLOSURE.md` states that a twin exists, at requirements level, without naming the flaw.**
+- ⚠ **Do NOT create any file holding the real planted target or its twin in this workspace.**
+
+## Self-test (required)
+
+`if __name__ == "__main__":` — one `PASS`/`FAIL` per check, exit 0 only if all pass. **Fake reviewers
+only; make no real call and spend nothing.** Use in-memory fixtures. Cover:
+
+- a reviewer that reports the planted rule on the source and not on the twin → `BITES`, trusted True
+- a reviewer that reports the planted rule on **BOTH** → `DOES_NOT_BITE` (no discrimination), trusted False
+- a reviewer that reports findings but never the planted rule → `DOES_NOT_BITE`, trusted False
+- a reviewer that reports **nothing at all** → `DOES_NOT_BITE`, trusted False
+- **`clean_source=None`** → `INCONCLUSIVE`, trusted False
+- a **truncated** result → `INCONCLUSIVE`; a result carrying an **error** → `INCONCLUSIVE`
+- the twin differing from the source by **one** hunk → `twin_hunks == 1`
+
+## THE PROOF OBLIGATION — TWO mutants, and name the one you do not run
+
+`tests/arms.py` gains **`ARM-4`**, asserting the above against the `prove_bites.py` at the given path,
+**including that `may_trust_clean()` is False for every status except `BITES`.**
+
+Then run **both** mutants in `<mutant-dir>/`, each a **single named change**, each verified present in
+its copy **before** the arm runs:
+
+- **M-gate** — `may_trust_clean()` returns `True` unconditionally → **ARM-4 must FAIL.**
+- **M-detector** — `prove_bites()` returns `"BITES"` unconditionally → **ARM-4 must FAIL.**
+
+⚠ **These are different mutants and only one of them tests the thing that matters.** M-gate tests the
+**gate**; M-detector tests the **detector**. A mutant that leaves the gate honest and makes the
+detector always say BITES passes a gate-only arm unchanged. **If you run only one, name the one you
+did not run** — do not imply the set is exhaustive.
+
+## Acceptance
+
+- `python src/prove_bites.py` exits 0 and **spends nothing**
+- `python tests/arms.py src` exits **0**; against either mutant → **non-zero**
+- Standard library only
+
+---
+
+# Increment 6: `chunks_reviewed` must mean "we hold its output" — ✅ DONE
 
 A chunk whose response we **cannot parse** is still counted as reviewed. So a client that returns
 prose rather than JSON produces a result that reports **complete coverage with zero findings** —
@@ -94,94 +206,6 @@ mutant does not cover, say so rather than implying the one mutant exhausts the s
 - `python src/review.py`, `src/findings.py`, `src/chunk.py` exit 0 and **spend nothing**
 - `python tests/arms.py src` exits **0**; `python tests/arms.py <mutant-dir>` exits **non-zero**
 - Standard library only
-
----
-
-# Increment 7 (NEXT, not yet active): `src/prove_bites.py`
-
-**Do not build this yet.** It is being re-specified: as first written it could be satisfied by a
-reviewer that ignores its input entirely and always emits the planted rule. It now requires a
-**second, clean source** so the proof is one of *discrimination* rather than of emitting a known
-string. Full brief follows this increment.
-
----
-
-# Increment 6 (superseded brief): `src/prove_bites.py` — a reviewer must EARN its verdict
-
-## Why this exists
-
-A review engine's **clean** result is worth something only if the engine has demonstrated it can
-**find** a known defect. Otherwise "no findings" is indistinguishable from "not looking."
-
-So: before any clean result from a reviewer is accepted, the reviewer must be shown a target with a
-**known planted flaw**, and must be shown to **report that flaw**. That is what this module decides.
-
-## Deliverable — `src/prove_bites.py`
-
-```python
-@dataclass(frozen=True)
-class BiteProof:
-    status: str                        # exactly "BITES" | "DOES_NOT_BITE" | "INCONCLUSIVE"
-    planted_rule: str                  # the rule_id that was planted in the target
-    found_rule_ids: tuple[str, ...]    # rule_ids the reviewer actually reported
-    reason: str = ""
-
-    def bites(self) -> bool: ...            # True ONLY for "BITES"
-    def may_trust_clean(self) -> bool: ...  # True ONLY for "BITES"
-
-def prove_bites(review, source: str, *, planted_rule: str, file: str = "<target>") -> BiteProof: ...
-```
-
-`review` is any callable `(source: str, file: str) -> ScanResult` — the wired review engine.
-
-## Required behaviour
-
-1. Run `review(source, file)`. Collect the `rule_id` of every finding it returns.
-2. **`"BITES"`** — at least one finding has `rule_id == planted_rule`. The reviewer found the
-   planted flaw.
-3. **`"DOES_NOT_BITE"`** — the review ran to completion, reported findings or none, and **none of
-   them was the planted rule.** The reviewer looked and did not find it.
-4. **`"INCONCLUSIVE"`** — the review could not have reached the flaw: the `ScanResult` is
-   `truncated`, or it carries an `error`, or `may_report_clean()` is False. 🔒 **These are NOT
-   failures of the reviewer and must NOT be scored as `DOES_NOT_BITE`** — the flaw may simply never
-   have been examined. Scoring that as "does not bite" blames the reviewer for our own budget stop.
-5. 🔒 **`may_trust_clean()` returns True if and only if `status == "BITES"`.** A reviewer whose
-   bite proof is `DOES_NOT_BITE` **or** `INCONCLUSIVE` has **not** earned a clean verdict, and a
-   clean result from it must be withheld. **`INCONCLUSIVE` is not a soft pass.**
-6. The three statuses are the **exact** strings above — callers compare on them.
-
-## Self-test (required)
-
-`if __name__ == "__main__":` — one `PASS`/`FAIL` per check, exit 0 only if all pass.
-**Use fake reviewers; make no real call and spend nothing.** Cover, at minimum:
-
-- a reviewer that reports the planted rule → `BITES`, and `may_trust_clean()` is True
-- a reviewer that reports findings but not the planted rule → `DOES_NOT_BITE`, `may_trust_clean()` False
-- a reviewer that reports **nothing at all** → `DOES_NOT_BITE`, `may_trust_clean()` False
-  ⚠ **This must be a real check: a reviewer that returns no findings has NOT bitten.** If your
-  comparison cannot distinguish "found nothing" from "found the flaw", say so plainly.
-- a **truncated** result → `INCONCLUSIVE`, `may_trust_clean()` False
-- a result carrying an **error** → `INCONCLUSIVE`, `may_trust_clean()` False
-
-## THE PROOF OBLIGATION
-
-`tests/arms.py` gains **`ARM-4`**, asserting against the `prove_bites.py` found at the given path:
-a reviewer that finds the planted rule yields `BITES`; one that returns nothing yields
-`DOES_NOT_BITE`; a truncated result yields `INCONCLUSIVE`; and **`may_trust_clean()` is False for
-every status except `BITES`.**
-
-Then the mutant, **one named change**:
-- make `may_trust_clean()` return `True` unconditionally → **ARM-4 must FAIL.**
-- Put it in `<mutant-dir>/`, **verify the mutation is present in the copy before running**, and run
-  `python tests/arms.py src` → all arms PASS, exit 0.
-
-Report every run verbatim with its exit code.
-
-## Acceptance
-
-- `python src/prove_bites.py` exits 0 and **spends nothing**
-- `python tests/arms.py src` exits **0**; `python tests/arms.py <mutant-dir>` exits **non-zero**
-- Standard library only. New file `src/prove_bites.py`; `tests/arms.py` extended.
 
 ---
 
