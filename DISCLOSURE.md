@@ -23,7 +23,22 @@ prior-developed.**
 | Path | Origin | Role | Class |
 |---|---|---|---|
 | `demo/vulnerable_app.py` | pre-prepared synthetic sample | the planted-vulnerability target | synthetic sample code |
-| `demo/test_vulnerable_app.py` | pre-prepared synthetic sample | harness proving the target is catchable | synthetic sample code |
+
+⚠ **A second row was removed from this table, and the reason is the point.** It listed
+`demo/test_vulnerable_app.py` — *"harness proving the target is catchable."* **A harness that proves
+the target is catchable NAMES THE FLAW.** Shipping it in `demo/` would put the answer in the same
+directory as the subject and hand it to every reviewer that reads the tree. Both it and the twin
+live **outside this repository**:
+
+| Artifact | Where | Why there |
+|---|---|---|
+| the target | `demo/vulnerable_app.py` — **here** | it is the subject, and it names nothing |
+| the twin | outside, `C:\secreview-twin\` | two files in one tree make `diff` on the pair the answer key |
+| the catchability proof | outside, `C:\secreview-twin\` | it names the flaw in plain words |
+
+`prove_bites` takes the twin as a **string supplied by the caller**, who reads it from outside.
+**The rule: an artifact that describes a graded target's defect is not reachable from the graded
+target's own repository** — by path, by import, or by `diff`.
 
 ## Built during the hackathon window
 
