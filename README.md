@@ -9,6 +9,20 @@ the reviewing intelligence.
 
 Status: **in progress.**
 
+## The judging artifact
+
+Per the hackathon rule, the Bob IDE task-session report is exported for judging. It
+lives in `bob_sessions/` in two renderings, and **the JSON is the record**:
+
+| File | What it is |
+|---|---|
+| `bob_sessions/bob-tasks-secreview-bob-2026-09-25.json` | **The complete record.** 8 sessions, 346 messages. Read this one. |
+| `bob_sessions/bob-tasks-secreview-bob-2026-09-25.md` | The readable view. Partial — **omits tool outputs and system messages.** |
+
+The Markdown is easier to read and the JSON is complete; the Markdown's omissions are
+described in [`DISCLOSURE.md`](DISCLOSURE.md). If you only follow one pointer, follow
+the JSON.
+
 ## Verifying what is actually published
 
 A green `git push` reports that a push happened. It does **not** report what a judge
