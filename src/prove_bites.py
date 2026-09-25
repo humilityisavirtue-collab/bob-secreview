@@ -63,6 +63,7 @@ Standard library only.  No network calls, no third-party dependencies.
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass
 import random
@@ -194,6 +195,38 @@ def _compute_twin_stats(source: str, twin: str) -> tuple[float, int, int]:
 # ---------------------------------------------------------------------------
 # Public function
 # ---------------------------------------------------------------------------
+
+_RULE_SEPARATORS = re.compile(r"[\s._\-]+")
+
+
+def _canon_rule_id(rule: str) -> str:
+    """Canonicalise a rule_id for comparison.
+
+    THE REVIEWER OWNS ITS rule_id NAMESPACE, and it does not have to agree with
+    ours. This is not speculation -- IBM Bob named the gap himself, in this
+    project's own review session (`docs/armA.out.txt`, 2026-09-25):
+
+        "A probe can carry a SQL-injection defect but the agent could detect it
+         under a different `rule_id` (e.g. `"sqli"` vs `"sql-injection"`),
+         causing a false `CAPABILITY_UNVERIFIED`. ... The spec needs to define
+         how `rule_id` values are canonicalized or who owns the namespace."
+
+    An exact string compare therefore makes a CORRECT reviewer score
+    DOES_NOT_BITE -- a false negative on the one axis this module exists to
+    measure, which is worse than no proof at all, because it is a proof that
+    lies in the accusing direction.
+
+    So we compare CANONICAL forms: case, surrounding whitespace, and the
+    `-` `_` `.` separators are folded away, so `sql-injection`,
+    `sql_injection`, `Sql Injection` and `SQL.INJECTION` are one rule.
+
+    It deliberately does NOT substring-match: `foo` must not match `foobar(`.
+    A substring test can confirm a rule that was never reported, which would
+    make this proof vacuous in precisely the way it was built to detect. The
+    comparison stays EXACT; only the spelling is folded.
+    """
+    return _RULE_SEPARATORS.sub("", str(rule).strip().casefold())
+
 
 def prove_bites(
     review: Callable[[str, str], object],
@@ -335,8 +368,12 @@ def prove_bites(
     twin_rule_ids = tuple(f.rule_id for f in twin_findings)
 
     # --- Determine verdict ---
-    rule_on_source = planted_rule in found_rule_ids
-    rule_on_twin   = planted_rule in twin_rule_ids
+    # Canonical membership, NOT exact string equality -- the reviewer spells its
+    # own rule_id namespace (see _canon_rule_id). An exact compare turns a
+    # correct reviewer that says "sql_injection" into a false DOES_NOT_BITE.
+    canon_planted  = _canon_rule_id(planted_rule)
+    rule_on_source = canon_planted in {_canon_rule_id(r) for r in found_rule_ids}
+    rule_on_twin   = canon_planted in {_canon_rule_id(r) for r in twin_rule_ids}
 
     if rule_on_source and not rule_on_twin:
         return BiteProof(
@@ -552,6 +589,52 @@ if __name__ == "__main__":
           _compute_baseline(DESCENDING_SOURCE) < 1.0)
     check("T1: twin_ratio_baseline exposed",
           proof_2line.twin_ratio_baseline >= 0.0)
+    print()
+
+    # ------------------------------------------------------------------
+    # R1. The planted rule is matched CANONICALLY, not literally.
+    #
+    # One-axis control over rev_bites_large, which BITES on
+    # LARGE_SOURCE/LARGE_TWIN in T2: the ONLY thing that changes is the
+    # SPELLING of the planted rule id.
+    # ------------------------------------------------------------------
+    print("--- R1: rule_id spelling variants ---")
+
+    def rev_bites_variant(src, file):
+        # Same defect, same capability, same findings -- the id is spelled the
+        # way ANOTHER tool spells it (our "planted-rule" vs its "Planted_Rule").
+        # Bob's armA session named this exact hazard.
+        if "evil" in src:
+            return _FakeScanResult(["Planted_Rule", "other-rule"])
+        return _FakeScanResult(["other-rule"])
+
+    def rev_bites_superstring(src, file):
+        # A DIFFERENT, longer rule id. This must NOT earn BITES: accepting it
+        # would be a substring match, which this module exists to refuse.
+        if "evil" in src:
+            return _FakeScanResult(["planted-rule-extended"])
+        return _FakeScanResult([])
+
+    check("R1: separator/case variants canonicalise to ONE rule",
+          len({_canon_rule_id("sql-injection"), _canon_rule_id("sql_injection"),
+               _canon_rule_id("Sql Injection"), _canon_rule_id("SQL.INJECTION")}) == 1)
+    check("R1: canonical form is NOT a substring match",
+          _canon_rule_id("foo") != _canon_rule_id("foobar")
+          and _canon_rule_id("injection") != _canon_rule_id("sql-injection"))
+
+    proof_variant = prove_bites(rev_bites_variant, LARGE_SOURCE,
+                                planted_rule="planted-rule", clean_source=LARGE_TWIN)
+    print(f"  variant spelling: status={proof_variant.status}  "
+          f"found={proof_variant.found_rule_ids}")
+    check("R1: differently-spelled rule_id still BITES (no false DOES_NOT_BITE)",
+          proof_variant.status == "BITES")
+
+    proof_super = prove_bites(rev_bites_superstring, LARGE_SOURCE,
+                              planted_rule="planted-rule", clean_source=LARGE_TWIN)
+    print(f"  superstring id  : status={proof_super.status}  "
+          f"found={proof_super.found_rule_ids}")
+    check("R1: a longer/different rule_id does NOT earn BITES",
+          proof_super.status == "DOES_NOT_BITE")
     print()
 
     # ------------------------------------------------------------------
