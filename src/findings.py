@@ -83,6 +83,9 @@ class ScanResult:
     findings: list[Finding] = field(default_factory=list)
     model_used: str = ""
     error: str | None = None
+    chunks_total: int = 0        # how many chunks the source was split into
+    chunks_reviewed: int = 0     # how many were actually reviewed
+    truncated: bool = False      # True if the review stopped before covering the whole source
 
     def as_dict(self) -> dict:
         """Return a plain dict that json.dumps() accepts without a custom encoder."""
@@ -106,6 +109,9 @@ class ScanResult:
             ],
             "model_used": self.model_used,
             "error": self.error,
+            "chunks_total": self.chunks_total,
+            "chunks_reviewed": self.chunks_reviewed,
+            "truncated": self.truncated,
         }
 
 

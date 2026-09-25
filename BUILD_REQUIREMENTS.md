@@ -7,7 +7,112 @@ honest record of **what was asked for**, increment by increment, in order.
 context: they describe interfaces that already exist under `src/`, and later modules should
 conform to those rather than invent their own.
 
-**No increment is currently ACTIVE.** The next one is written when the plan calls for it.
+Increment 4 is currently ACTIVE.
+
+---
+
+# ⬅ ACTIVE — Increment 4: `src/review.py`, the review engine
+
+Chunks a source file, sends each chunk out for review, and turns what comes back into `Finding`
+objects whose line numbers point at **the file the reader will actually open**.
+
+## Deliverable A — a small additive change to `src/findings.py`
+
+`ScanResult` gains three fields, each with a default so existing construction still works:
+
+```python
+chunks_total: int = 0        # how many chunks the source was split into
+chunks_reviewed: int = 0     # how many were actually reviewed
+truncated: bool = False      # True if the review stopped before covering the whole source
+```
+
+`as_dict()` must include them. **Nothing else about `findings.py` changes.**
+
+> **Why these exist, and this is the heart of the increment.** A review that stopped early must
+> be **legible as partial**. If a caller cannot tell "no findings" from "we only got through a
+> third of the file", then a truncated run reads as a clean bill of health — and a result that
+> *reads* correct while being unverified is the precise failure this whole project exists to
+> prevent. Do not let that failure into our own engine.
+
+## Deliverable B — `src/review.py`
+
+```python
+# A client is any callable: prompt -> (response_text, cost_in_coins)
+ReviewClient = Callable[[str], tuple[str, float]]
+
+def review_source(source: str, client: ReviewClient, *, file: str = "<memory>",
+                  max_cost: float, chunk_lines: int = 300, overlap_lines: int = 30) -> ScanResult: ...
+
+def review_file(path: str | os.PathLike, client: ReviewClient, *, max_cost: float, ...) -> ScanResult: ...
+```
+
+**`max_cost` is required and has NO default.** It is keyword-only, so omitting it is a `TypeError`
+at the call site; additionally raise `ValueError` if it is `None` or `<= 0`.
+
+> **Why it is required rather than defaulted:** every chunk is a **paid call**. A reviewer that
+> silently spends is a worse failure than one that refuses to start, and it is the only failure
+> here that costs money while nobody is watching. **The cap must be impossible to forget, not
+> merely documented.** This is a product decision, not a build one.
+
+### Required behaviour
+
+1. Split the source with `chunk.py` (`chunk_text`). `chunks_total` is how many chunks come back.
+2. For each chunk, build a prompt that contains the chunk's text and **states the required output
+   contract explicitly** — a JSON array of finding objects. Where the contract is silent, be
+   tolerant on the way in: expect the model's format to drift, strip code fences, and extract the
+   first `[...]` if the response is not bare JSON.
+3. Each finding comes back with a line number **relative to its chunk**. Map every one to an
+   absolute line using `chunk.to_absolute`. A finding is useless to a reader at a wrong line.
+4. Call `client` once per chunk. Add its returned cost to a running total **before** the next call.
+   **Stop before a call that would take the total past `max_cost`** and set `truncated = True`.
+   Never exceed the cap.
+5. Findings from **overlapping** chunks will repeat. De-duplicate on (rule_id, absolute line,
+   title) so one defect is reported once.
+6. `model_used` records the client's identity if it exposes one; otherwise leave it empty.
+7. **A chunk that fails — the client raises, or the response cannot be parsed — is NOT zero
+   findings.** Record it. A failure must leave the result legible as incomplete; it must never
+   be reported as a file with nothing wrong in it.
+
+### Self-test (required)
+
+`if __name__ == "__main__":` — one `PASS`/`FAIL` line per check, exit 0 only if all pass.
+**Use a FAKE client. The self-test must never make a real call or spend anything.**
+
+It must cover, at minimum: findings come back with **absolute** line numbers; a finding reported in
+the overlap is de-duplicated; the budget stop sets `truncated=True` with
+`chunks_reviewed < chunks_total`; and a client that raises leaves the result **not** reading as
+clean.
+
+## Deliverable C — `tests/arms.py` gains `ARM-3`
+
+Same harness, same argv path. `ARM-3` asserts the budget-stop invariant against the `review.py`
+**found at the given path**: with a fake client and a cap too small to cover the source, the result
+has `truncated is True` and `chunks_reviewed < chunks_total`, and the cap was not exceeded.
+
+## THE PROOF OBLIGATION — this time there is no pre-fix revision
+
+`review.py` is new, so git history holds no unfixed copy of it. **An arm that has never been shown
+to fail has not been proven**, so construct the known-bad subject:
+
+1. Copy `src/review.py` to `<mutant-dir>/review.py`.
+2. Remove **only** the truncation marking — the line(s) that set `truncated = True` when the budget
+   stops the review. Change nothing else.
+3. Run `python tests/arms.py <mutant-dir>` → **ARM-3 MUST FAIL.** If it passes, the arm is vacuous
+   and the fix is unproven.
+4. `python tests/arms.py src` → **all arms PASS.**
+
+Report all four results verbatim, with exit codes, and state explicitly what you changed in the
+mutant — one named change, nothing else.
+
+⚠ **A mutant whose anchor has gone stale tests nothing.** Assert the change you made is present in
+the mutant copy before you run the arm.
+
+## Acceptance
+
+- `python src/review.py` exits 0 and **spends nothing**
+- `python src/findings.py` exits 0 · `python src/chunk.py` exits 0
+- `python tests/arms.py src` exits **0**; `python tests/arms.py <mutant-dir>` exits **non-zero**
+- Standard library only. New file: `tests/arms.py` is extended; `src/review.py` is new.
 
 ---
 

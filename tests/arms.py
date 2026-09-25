@@ -1,10 +1,10 @@
-"""tests/arms.py — conformance harness for findings.py and chunk.py.
+"""tests/arms.py — conformance harness for findings.py, chunk.py, and review.py.
 
 Usage:
     python tests/arms.py <path>
 
-<path> may be a file or a directory containing findings.py and chunk.py.
-The modules are imported from that path; standard library only.
+<path> may be a file or a directory containing findings.py, chunk.py, and
+review.py. The modules are imported from that path; standard library only.
 
 Exit 0 only if all arms pass.
 """
@@ -31,25 +31,34 @@ def _load_module(name: str, path: str):
     return mod
 
 
-def _resolve(arg: str) -> tuple[str, str]:
-    """Return (findings_path, chunk_path) from a file-or-directory argument."""
+def _resolve(arg: str) -> tuple[str, str, str]:
+    """Return (findings_path, chunk_path, review_path) from a file-or-directory argument."""
     arg = os.path.abspath(arg)
     if os.path.isdir(arg):
         findings_path = os.path.join(arg, "findings.py")
         chunk_path = os.path.join(arg, "chunk.py")
+        review_path = os.path.join(arg, "review.py")
     else:
-        # A single file was given — derive the sibling from the same directory.
+        # A single file was given — derive siblings from the same directory.
         base = os.path.dirname(arg)
         name = os.path.basename(arg)
         if name == "findings.py":
             findings_path = arg
             chunk_path = os.path.join(base, "chunk.py")
+            review_path = os.path.join(base, "review.py")
         elif name == "chunk.py":
             chunk_path = arg
             findings_path = os.path.join(base, "findings.py")
+            review_path = os.path.join(base, "review.py")
+        elif name == "review.py":
+            review_path = arg
+            findings_path = os.path.join(base, "findings.py")
+            chunk_path = os.path.join(base, "chunk.py")
         else:
-            raise ValueError(f"Unrecognised file {arg!r}; expected findings.py or chunk.py")
-    return findings_path, chunk_path
+            raise ValueError(
+                f"Unrecognised file {arg!r}; expected findings.py, chunk.py, or review.py"
+            )
+    return findings_path, chunk_path, review_path
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +178,65 @@ def arm2(chunk_path: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# ARM-3: budget-stop invariant for review.py
+# ---------------------------------------------------------------------------
+
+def arm3(review_path: str) -> bool:
+    """ARM-3 — budget-stop: truncated=True and chunks_reviewed < chunks_total."""
+    import json as _json
+
+    try:
+        review_mod = _load_module("review", review_path)
+    except Exception as exc:
+        print(f"FAIL ARM-3: could not import review from {review_path!r}: {exc}")
+        return False
+
+    review_source = getattr(review_mod, "review_source", None)
+    if review_source is None:
+        print("FAIL ARM-3: review module has no review_source function")
+        return False
+
+    # Build a source with enough lines for multiple chunks.
+    # chunk_lines=40, overlap=10, step=30
+    # 120 lines -> 3 chunks (starts: 1, 31, 61; well, let's verify)
+    # chunk0: 1-40, chunk1: 31-70, chunk2: 61-100, chunk3: 91-120 (4 chunks)
+    source = "\n".join(f"line{i}" for i in range(1, 121))  # 120 lines
+
+    # Each fake call costs 1.0 coin. Cap = 1.5 → only first chunk is reviewed.
+    def fake_client(prompt: str) -> "tuple[str, float]":
+        return "[]", 1.0
+
+    try:
+        result = review_source(
+            source, fake_client,
+            file="arm3.py",
+            max_cost=1.5,
+            chunk_lines=40,
+            overlap_lines=10,
+        )
+    except Exception as exc:
+        print(f"FAIL ARM-3: review_source raised unexpectedly: {exc}")
+        return False
+
+    if not result.truncated:
+        print(
+            f"FAIL ARM-3: expected truncated=True but got truncated={result.truncated!r} "
+            f"(chunks_reviewed={result.chunks_reviewed}, chunks_total={result.chunks_total})"
+        )
+        return False
+
+    if result.chunks_reviewed >= result.chunks_total:
+        print(
+            f"FAIL ARM-3: expected chunks_reviewed < chunks_total but got "
+            f"chunks_reviewed={result.chunks_reviewed}, chunks_total={result.chunks_total}"
+        )
+        return False
+
+    print("PASS ARM-3")
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -178,7 +246,7 @@ if __name__ == "__main__":
         sys.exit(2)
 
     try:
-        findings_path, chunk_path = _resolve(sys.argv[1])
+        findings_path, chunk_path, review_path = _resolve(sys.argv[1])
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(2)
@@ -186,6 +254,7 @@ if __name__ == "__main__":
     results = [
         arm1(findings_path),
         arm2(chunk_path),
+        arm3(review_path),
     ]
 
     sys.exit(0 if all(results) else 1)
