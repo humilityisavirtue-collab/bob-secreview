@@ -1,8 +1,22 @@
 # Disclosure
 
-Per the hackathon rule that pre-prepared **synthetic sample code** and **demo UI
-templates** may be used **if clearly disclosed**, and that **all core Bob analysis
-and project logic must be built during the hackathon window**:
+**Authority: the Official Rules** (`Official Rules IBM Hackathon May 2026.pdf`), which state
+expressly that *"IN THE EVENT OF A DISCREPANCY BETWEEN ANY INFORMATION AND/OR COMMUNICATION, THESE
+OFFICIAL RULES SHALL GOVERN."* An event-page note, a Discord message or a briefing is a
+*communication*, and the Rules outrank communications by their own terms. **This disclosure is
+written to the stricter reading and does not depend on any carve-out.**
+
+Two clauses govern, and they apply to different things:
+
+- **Entry requirements** — the Submission must be *"original to the Contest (i.e. was not developed
+  in any substantive form/format prior to the Contest)."*
+- **Intellectual Property Rights** — *"Your team may bring to the Event any pre-developed or
+  licensed Technology that you plan to use in connection with your prototype."*
+
+**This submission satisfies both.** All of `src/**` — every module the reviewer actually runs — was
+built during the hackathon window. The material below is a **pre-prepared synthetic sample**,
+disclosed as such, and brought in under the IP-Rights clause. **No submission logic is
+prior-developed.**
 
 ## Pre-existing, disclosed
 
@@ -14,6 +28,15 @@ and project logic must be built during the hackathon window**:
 ## Built during the hackathon window
 
 `src/**` — all core project logic. `bob_sessions/**` — Bob IDE task-session exports.
+
+## The two submission requirements, and which half we have
+
+The entry requirements ask for **both** an **exported IBM Bob report** of all relevant
+tasks/sessions **and** **screenshots**. They are two requirements, not one.
+
+- **Export — ✅ present:** `bob_sessions/`, below. Produced by Bob IDE's own Export Task History.
+- **Screenshots — ⏳ outstanding:** session captures are taken separately and belong in
+  `bob_sessions/` alongside the exports.
 
 ## The Bob task-session exports (`bob_sessions/`)
 
