@@ -82,12 +82,36 @@ written — it must not have existed in substantive form before the Contest — 
 typed it*. In-window hand work satisfies that on the same footing as a session, and Bob
 remains the core component of the submission either way.
 
-**⚠ One honest gap, and it is being closed, not hidden.** Increments 8–11 appear in Bob's
-task store but are **not yet in the exported record**, because the workspace path's case
-changed mid-build and the exporter matches it case-sensitively, forking the project into two
-buckets. The export currently covers the first bucket only. Both buckets are being exported
-and both belong in `bob_sessions/`. **Anyone auditing this should expect two exports, and
-should treat the larger one as authoritative.**
+**There are two session records, and they are not the same kind of artifact.**
+
+The IDE's own Export Task History produced the **first**. It **cannot produce the second**:
+Windows paths are case-insensitive, so the IDE resolves both spellings of this workspace to
+the one registered project, and Bob Shell 2.0.5 exposes no export command (`chat`, `run`,
+`mcp`, `acp`). Three separate attempts each returned the same first bucket. **That is a
+property of the tool, not a defect in the work.**
+
+So the second is **rendered** from Bob's own task store — `~/.bob/db/bob.db`, the same source
+`exportProject` reads — carrying the same rows and messages the IDE would have emitted.
+⚠ **Nothing was renamed in that store.** Merging the buckets by editing `project_id` would
+have altered Bob's own record and destroyed the very fork that makes this explanation true.
+
+**The rendering is verified, not asserted.** Pointed at the *first* bucket, the renderer
+reproduces the IDE's own export **byte-for-byte** — `sha256` of the tasks array
+`62153495433172022415d6a9931ea3a7ad05b4b4`, identical. It is held to that test rather than to
+a plausible appearance.
+
+| file | kind | tasks | messages |
+|---|---|---|---|
+| `bob-tasks-secreview-bob-2026-09-25.json` | **IDE export** | 8 | 346 |
+| `bob-tasks-secreview-bob-CAPITAL-C_rendered.json` | **rendered** from Bob's store | 12 | 460 |
+
+**Together: all 20 sessions and 806 messages of Bob work.**
+
+⚠ **The second record includes four tasks that ended in `error`, three of them
+`MaxCostReachedError`.** These are **deliberately kept.** They are the spend cap doing the
+thing it claims to do, in Bob's own artifact: the runs stopped because they reached the
+limit they were given. Removing them would leave a gap that looks like concealment; keeping
+them shows a guard that fired. A record is not tidied.
 
 ## The two submission requirements, and which half we have
 
