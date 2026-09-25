@@ -15,15 +15,30 @@ A green `git push` reports that a push happened. It does **not** report what a j
 receives. The served bytes are the artifact — compare them, and check the repo the way
 someone with no session sees it:
 
+Three checks, in order of authority:
+
 ```bash
-R=https://raw.githubusercontent.com/humilityisavirtue-collab/bob-secreview/master
-curl -sS "$R/src/chunk.py" -o served.py && sha256sum served.py src/chunk.py   # must match
+# 1. Did the push land?  The remote REF is authoritative.
+git ls-remote origin refs/heads/master            # must equal your local HEAD
+
+# 2. Is the remote tree what you committed?
+git fetch -q origin master
+git cat-file -p origin/master:src/chunk.py | sha256sum
+sha256sum src/chunk.py                            # must match
+
+# 3. Is the repo public?  A logged-in session sees what a judge cannot.
 curl -sS -o /dev/null -w '%{http_code}\n' \
-     https://github.com/humilityisavirtue-collab/bob-secreview                 # must be 200
+     https://github.com/humilityisavirtue-collab/bob-secreview     # must be 200
 ```
 
-Run this before claiming anything is published. "The URL resolved" and "the content is
-current" are different claims.
+⚠ **`raw.githubusercontent.com` is eventually consistent and serves the PREVIOUS revision
+for a period after a push** — query-string cache-busters do not defeat it.
+
+Measured 2026-09-25: a served-bytes comparison (`curl` the raw URL and `sha256sum` it) reported
+a difference that was **purely propagation lag**. `ls-remote`, the fetched remote tree, and the
+GitHub API all agreed with local throughout; only the raw CDN was stale, and it stayed stale
+across three attempts. Use the raw URL to *inspect* content; **do not use it to conclude a push
+failed.**
 
 ## Proving a check can fail
 
