@@ -36,7 +36,7 @@ class Location:
     symbol: str | None = None  # function/class name if applicable
 
 
-@dataclass
+@dataclass(frozen=True)
 class Finding:
     rule_id: str          # e.g. "sql-injection", "null-deref"
     severity: str         # one of SEVERITY_RANKS
@@ -46,7 +46,8 @@ class Finding:
     recommendation: str = ""
 
     def __post_init__(self) -> None:
-        self.severity = validate_severity(self.severity)
+        # frozen=True blocks plain assignment; bypass via object.__setattr__
+        object.__setattr__(self, "severity", validate_severity(self.severity))
 
     # NOTE: __lt__ is implemented so that sorted() works without a key=.
     # Most severe first means a higher rank comes before a lower rank, so we
@@ -85,6 +86,7 @@ class ScanResult:
     error: str | None = None
     chunks_total: int = 0        # how many chunks the source was split into
     chunks_reviewed: int = 0     # how many were actually reviewed
+    chunks_failed: int = 0       # how many chunks failed (client raised or parse error)
     truncated: bool = False      # True if the review stopped before covering the whole source
 
     def as_dict(self) -> dict:
@@ -111,8 +113,16 @@ class ScanResult:
             "error": self.error,
             "chunks_total": self.chunks_total,
             "chunks_reviewed": self.chunks_reviewed,
+            "chunks_failed": self.chunks_failed,
             "truncated": self.truncated,
         }
+
+    def may_report_clean(self) -> bool:
+        """True ONLY when the whole source was reviewed with no failures."""
+        return (
+            self.chunks_failed == 0
+            and self.chunks_reviewed + self.chunks_failed == self.chunks_total
+        )
 
 
 # ---------------------------------------------------------------------------

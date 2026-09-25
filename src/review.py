@@ -3,6 +3,24 @@
 Chunks a source file, sends each chunk out for review via a callable client,
 and maps chunk-relative findings back to absolute line numbers.
 
+Spend-cap guarantee
+-------------------
+The total cost of a review run never exceeds `max_cost`. This is enforced by
+two complementary mechanisms:
+
+1. **Pre-call affordability check**: before every chunk call the engine
+   computes the remaining budget (`max_cost - total_cost`). If that remainder
+   is strictly less than `per_call_ceiling`, the call does not begin and the
+   result is marked truncated. The call is *refused*, not started-then-capped.
+
+2. **Per-call provider limit**: the engine passes
+   `per_call_cap = min(per_call_ceiling, max_cost - total_cost)` to the
+   client as its second argument. The client is expected to forward this as the
+   provider's own per-call spend limit (e.g. OpenAI's `max_tokens` budget or
+   an equivalent hard ceiling). The provider enforces it at the call boundary.
+   This is the mechanism — naming an outcome without the mechanism was the
+   defect this design replaces.
+
 Standard library only. No third-party dependencies, no network calls.
 """
 
@@ -16,10 +34,10 @@ import sys
 from typing import Callable
 
 # ---------------------------------------------------------------------------
-# Type alias: a client is any callable prompt -> (response_text, cost_in_coins)
+# Type alias: a client is any callable (prompt, per_call_cap) -> (response_text, cost_in_coins)
 # ---------------------------------------------------------------------------
 
-ReviewClient = Callable[[str], "tuple[str, float]"]
+ReviewClient = Callable[["str, float"], "tuple[str, float]"]
 
 # ---------------------------------------------------------------------------
 # Internal helpers to load sibling modules from the same directory
@@ -155,6 +173,7 @@ def review_source(
     *,
     file: str = "<memory>",
     max_cost: float,
+    per_call_ceiling: float,
     chunk_lines: int = 300,
     overlap_lines: int = 30,
 ) -> "ScanResult":
@@ -162,11 +181,18 @@ def review_source(
     Review `source` by chunking it and sending each chunk to `client`.
 
     `max_cost` is required and keyword-only. Raises ValueError if None or <= 0.
-    The review stops before any call that would exceed the cap and sets
-    truncated=True on the result.
+    `per_call_ceiling` is required and keyword-only. Raises ValueError if None or <= 0.
+    It is the maximum a single call is allowed to cost; the engine refuses to
+    start any call for which the worst case cannot be afforded.
+
+    The client signature is: (prompt: str, per_call_cap: float) -> (response_text, cost).
+    `per_call_cap = min(per_call_ceiling, max_cost - total_cost)` is passed on
+    every call so the provider can enforce it at its boundary.
     """
     if max_cost is None or max_cost <= 0:
         raise ValueError(f"max_cost must be > 0, got {max_cost!r}")
+    if per_call_ceiling is None or per_call_ceiling <= 0:
+        raise ValueError(f"per_call_ceiling must be > 0, got {per_call_ceiling!r}")
 
     # Detect model identity if client exposes one.
     model_used = getattr(client, "model_name", "") or getattr(client, "model", "") or ""
@@ -187,35 +213,30 @@ def review_source(
     seen: set[tuple[str, int, str]] = set()
     total_cost: float = 0.0
     chunks_reviewed: int = 0
+    chunks_failed: int = 0
 
     for chunk in chunks:
-        # Budget guard — stop before a call that would exceed the cap
-        # (We check before spending; we don't know the cost yet, so we check
-        #  strictly: if remaining budget is 0 we stop.  After each call we
-        #  accumulate and re-check before the next one.)
-        if total_cost >= max_cost:
+        # Pre-call affordability check: refuse if the worst case cannot be afforded.
+        # If the remaining budget is less than per_call_ceiling, the call does not begin.
+        remaining = max_cost - total_cost
+        if remaining < per_call_ceiling:
             result.truncated = True
             break
 
+        per_call_cap = min(per_call_ceiling, remaining)
         prompt = _build_prompt(chunk, file)
         try:
-            response_text, cost = client(prompt)
+            response_text, cost = client(prompt, per_call_cap)
         except Exception as exc:
             # A failing chunk is NOT zero findings — record incomplete state.
-            chunks_reviewed += 1
+            # A failure is not a review: increment chunks_failed, not chunks_reviewed.
+            chunks_failed += 1
             error_msg = f"chunk {chunk.index} failed: {exc}"
             result.error = (result.error + "; " + error_msg) if result.error else error_msg
-            total_cost += 0  # no cost incurred for a failed call
             continue
 
         total_cost += cost
         chunks_reviewed += 1
-
-        # Stop after this chunk's cost is added if we've now hit the cap;
-        # the NEXT iteration's pre-check will catch it — which is correct:
-        # we already spent this cost.  But check NOW if the *next* call
-        # would definitely exceed the cap (we don't know future costs, so
-        # the pre-check above is the real guard).
 
         try:
             new_findings = _parse_findings(response_text, chunk, file)
@@ -231,13 +252,7 @@ def review_source(
                 result.findings.append(f)
 
     result.chunks_reviewed = chunks_reviewed
-
-    # If we exited the loop without processing all chunks (truncated was set
-    # inside the loop), it is already True.  If we finished all chunks normally,
-    # truncated stays False.
-    if chunks_reviewed < chunks_total and not result.truncated:
-        # Shouldn't happen in normal flow, but be defensive.
-        result.truncated = True
+    result.chunks_failed = chunks_failed
 
     return result
 
@@ -247,6 +262,7 @@ def review_file(
     client: ReviewClient,
     *,
     max_cost: float,
+    per_call_ceiling: float,
     chunk_lines: int = 300,
     overlap_lines: int = 30,
 ) -> "ScanResult":
@@ -259,6 +275,7 @@ def review_file(
         client,
         file=path,
         max_cost=max_cost,
+        per_call_ceiling=per_call_ceiling,
         chunk_lines=chunk_lines,
         overlap_lines=overlap_lines,
     )
@@ -294,7 +311,7 @@ if __name__ == "__main__":
 
     call_order: list[int] = []
 
-    def fake_client_absolute(prompt: str) -> tuple[str, float]:
+    def fake_client_absolute(prompt: str, per_call_cap: float) -> tuple[str, float]:
         # Determine which chunk by looking for the start-line in the prompt
         import re as _re
         m = _re.search(r"lines (\d+) to", prompt)
@@ -312,6 +329,7 @@ if __name__ == "__main__":
 
     result_abs = review_source(src_abs, fake_client_absolute,
                                file="test.py", max_cost=10.0,
+                               per_call_ceiling=1.0,
                                chunk_lines=40, overlap_lines=10)
 
     # chunk0 starts at line 1: absolute = 1 + 5 - 1 = 5
@@ -326,17 +344,10 @@ if __name__ == "__main__":
     # Test 2: overlap de-duplication
     # ------------------------------------------------------------------
     # chunk0: lines 1-40, chunk1: lines 31-60
-    # Both chunks report a finding at their relative line 10.
-    # chunk0 rel-10 = abs-10; chunk1 rel-10 = abs-40.
-    # But if we make both report rel-1 (abs-1 vs abs-31): different → not dupes.
-    # To test a dupe: make both report the SAME rule+line+title.
-    # chunk0 rel-1 -> abs-1; chunk1 rel-1 -> abs-31 → NOT a dupe.
-    # For a real dupe: chunk1 must report line 31-30+1=1 which in chunk1 is
-    # abs=31+1-1=31.  We want both to produce abs-31.
-    # chunk0 rel-31 -> abs-31; chunk1 rel-1 -> abs-31.
-    # Both same rule_id + title → deduped.
+    # Both chunks report a finding at their relative line that maps to abs-31.
+    # chunk0 rel-31 -> abs-31; chunk1 rel-1 -> abs-31 → deduplicated.
 
-    def fake_client_dedup(prompt: str) -> tuple[str, float]:
+    def fake_client_dedup(prompt: str, per_call_cap: float) -> tuple[str, float]:
         import re as _re
         m = _re.search(r"lines (\d+) to", prompt)
         start = int(m.group(1)) if m else 1
@@ -356,6 +367,7 @@ if __name__ == "__main__":
 
     result_dedup = review_source(src_abs, fake_client_dedup,
                                  file="test.py", max_cost=10.0,
+                                 per_call_ceiling=1.0,
                                  chunk_lines=40, overlap_lines=10)
     dup_findings = [f for f in result_dedup.findings
                     if f.rule_id == "dup-rule" and f.location.line_start == 31]
@@ -365,52 +377,93 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # Test 3: budget stop sets truncated=True and chunks_reviewed < chunks_total
     # ------------------------------------------------------------------
-    # 3 chunks; each call costs 1.0; cap = 1.5 → only 1 chunk reviewed.
-    src_budget = make_source(120)  # 120 lines → 3 chunks (40-line, overlap 10)
+    # 3+ chunks; each call costs 1.0; cap = 1.5, per_call_ceiling=1.0
+    # After first chunk (cost 1.0), remaining = 0.5 < per_call_ceiling=1.0 → stop.
+    src_budget = make_source(120)  # 120 lines → multiple chunks (40-line, overlap 10)
 
-    def fake_client_costly(prompt: str) -> tuple[str, float]:
+    costs_incurred: list[float] = []
+
+    def fake_client_costly(prompt: str, per_call_cap: float) -> tuple[str, float]:
+        costs_incurred.append(1.0)
         return "[]", 1.0
 
     result_budget = review_source(src_budget, fake_client_costly,
                                   file="test.py", max_cost=1.5,
+                                  per_call_ceiling=1.0,
                                   chunk_lines=40, overlap_lines=10)
     check("budget stop: truncated is True",
           result_budget.truncated is True)
     check("budget stop: chunks_reviewed < chunks_total",
           result_budget.chunks_reviewed < result_budget.chunks_total)
-    check("budget stop: cap not exceeded (total cost within max_cost)",
-          True)  # by construction: we stop before the call that would exceed
+    check("budget stop: cap not exceeded",
+          sum(costs_incurred) <= 1.5)
 
     # ------------------------------------------------------------------
     # Test 4: failing client leaves result NOT reading as clean
     # ------------------------------------------------------------------
-    def fake_client_raises(prompt: str) -> tuple[str, float]:
+    def fake_client_raises(prompt: str, per_call_cap: float) -> tuple[str, float]:
         raise RuntimeError("Simulated client failure")
 
     result_fail = review_source(make_source(10), fake_client_raises,
                                 file="test.py", max_cost=10.0,
+                                per_call_ceiling=1.0,
                                 chunk_lines=40, overlap_lines=10)
     check("failing client: error field is set (not None/empty)",
           bool(result_fail.error))
-    check("failing client: chunks_reviewed recorded (not zero when chunk attempted)",
-          result_fail.chunks_reviewed >= 1)
+    check("failing client: chunks_failed == chunks_total",
+          result_fail.chunks_failed == result_fail.chunks_total)
+    check("failing client: chunks_reviewed == 0",
+          result_fail.chunks_reviewed == 0)
+    check("failing client: may_report_clean() is False",
+          result_fail.may_report_clean() is False)
 
     # ------------------------------------------------------------------
-    # Test 5: max_cost validation
+    # Test 5: may_report_clean() is True only for a complete, failure-free review
+    # ------------------------------------------------------------------
+    def fake_client_ok(prompt: str, per_call_cap: float) -> tuple[str, float]:
+        return "[]", 0.01
+
+    result_clean = review_source(make_source(10), fake_client_ok,
+                                 file="test.py", max_cost=10.0,
+                                 per_call_ceiling=1.0,
+                                 chunk_lines=40, overlap_lines=10)
+    check("may_report_clean(): True when complete and no failures",
+          result_clean.may_report_clean() is True)
+
+    # ------------------------------------------------------------------
+    # Test 6: max_cost and per_call_ceiling validation
     # ------------------------------------------------------------------
     raised_none = False
     try:
-        review_source("x", fake_client_raises, file="t.py", max_cost=None)  # type: ignore
+        review_source("x", fake_client_ok, file="t.py", max_cost=None,  # type: ignore
+                      per_call_ceiling=1.0)
     except ValueError:
         raised_none = True
     check("max_cost=None raises ValueError", raised_none)
 
     raised_neg = False
     try:
-        review_source("x", fake_client_raises, file="t.py", max_cost=-1.0)
+        review_source("x", fake_client_ok, file="t.py", max_cost=-1.0,
+                      per_call_ceiling=1.0)
     except ValueError:
         raised_neg = True
     check("max_cost<=0 raises ValueError", raised_neg)
+
+    raised_pcc_none = False
+    try:
+        review_source("x", fake_client_ok, file="t.py", max_cost=1.0,
+                      per_call_ceiling=None)  # type: ignore
+    except ValueError:
+        raised_pcc_none = True
+    check("per_call_ceiling=None raises ValueError", raised_pcc_none)
+
+    raised_pcc_neg = False
+    try:
+        review_source("x", fake_client_ok, file="t.py", max_cost=1.0,
+                      per_call_ceiling=0.0)
+    except ValueError:
+        raised_pcc_neg = True
+    check("per_call_ceiling<=0 raises ValueError", raised_pcc_neg)
 
     print()
     if failures:

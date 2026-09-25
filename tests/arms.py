@@ -11,6 +11,7 @@ Exit 0 only if all arms pass.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import os
 import sys
@@ -62,11 +63,11 @@ def _resolve(arg: str) -> tuple[str, str, str]:
 
 
 # ---------------------------------------------------------------------------
-# ARM-1: severity is enforced at construction
+# ARM-1: severity is enforced at construction; Finding is frozen
 # ---------------------------------------------------------------------------
 
 def arm1(findings_path: str) -> bool:
-    """ARM-1 — severity is enforced at construction."""
+    """ARM-1 — severity is enforced at construction; Finding is immutable (frozen)."""
     try:
         findings = _load_module("findings", findings_path)
     except Exception as exc:
@@ -103,6 +104,26 @@ def arm1(findings_path: str) -> bool:
     ordered = sorted([f_low, f_high])
     if ordered[0].severity != "high":
         print(f"FAIL ARM-1: sorted([low, high])[0].severity == {ordered[0].severity!r}, expected 'high'")
+        return False
+
+    # 1d. Assigning to a Finding field must raise FrozenInstanceError specifically.
+    # (FrozenInstanceError subclasses AttributeError; catching only AttributeError would
+    # pass vacuously on any attribute typo — we require the exact frozen-dataclass error.)
+    try:
+        f_high.severity = "low"  # type: ignore[misc]
+        print("FAIL ARM-1: assigning to Finding.severity did not raise (Finding is not frozen)")
+        return False
+    except dataclasses.FrozenInstanceError:
+        pass  # correct — the dataclass IS frozen
+    except AttributeError as exc:
+        # Any other AttributeError (e.g. missing slot) is NOT sufficient proof of frozen
+        print(
+            f"FAIL ARM-1: assigning to Finding.severity raised AttributeError but not "
+            f"FrozenInstanceError — Finding may not be a frozen dataclass: {exc}"
+        )
+        return False
+    except Exception as exc:
+        print(f"FAIL ARM-1: assigning to Finding.severity raised unexpected {type(exc).__name__}: {exc}")
         return False
 
     print("PASS ARM-1")
@@ -178,13 +199,11 @@ def arm2(chunk_path: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# ARM-3: budget-stop invariant for review.py
+# ARM-3: budget-stop, spend-cap, failing-client, and may_report_clean invariants
 # ---------------------------------------------------------------------------
 
 def arm3(review_path: str) -> bool:
-    """ARM-3 — budget-stop: truncated=True and chunks_reviewed < chunks_total."""
-    import json as _json
-
+    """ARM-3 — budget-stop, cap enforcement, failing-client, and may_report_clean."""
     try:
         review_mod = _load_module("review", review_path)
     except Exception as exc:
@@ -196,14 +215,18 @@ def arm3(review_path: str) -> bool:
         print("FAIL ARM-3: review module has no review_source function")
         return False
 
-    # Build a source with enough lines for multiple chunks.
+    # ------------------------------------------------------------------
+    # 3a. Budget-stop: truncated=True and chunks_reviewed < chunks_total
+    # ------------------------------------------------------------------
     # chunk_lines=40, overlap=10, step=30
-    # 120 lines -> 3 chunks (starts: 1, 31, 61; well, let's verify)
-    # chunk0: 1-40, chunk1: 31-70, chunk2: 61-100, chunk3: 91-120 (4 chunks)
+    # 120 lines → 4 chunks; each call costs 1.0; cap=1.5, per_call_ceiling=1.0
+    # After first chunk (cost 1.0), remaining=0.5 < per_call_ceiling=1.0 → stop.
     source = "\n".join(f"line{i}" for i in range(1, 121))  # 120 lines
 
-    # Each fake call costs 1.0 coin. Cap = 1.5 → only first chunk is reviewed.
-    def fake_client(prompt: str) -> "tuple[str, float]":
+    costs_incurred: list[float] = []
+
+    def fake_client(prompt: str, per_call_cap: float) -> "tuple[str, float]":
+        costs_incurred.append(1.0)
         return "[]", 1.0
 
     try:
@@ -211,6 +234,7 @@ def arm3(review_path: str) -> bool:
             source, fake_client,
             file="arm3.py",
             max_cost=1.5,
+            per_call_ceiling=1.0,
             chunk_lines=40,
             overlap_lines=10,
         )
@@ -229,6 +253,81 @@ def arm3(review_path: str) -> bool:
         print(
             f"FAIL ARM-3: expected chunks_reviewed < chunks_total but got "
             f"chunks_reviewed={result.chunks_reviewed}, chunks_total={result.chunks_total}"
+        )
+        return False
+
+    # 3b. Cap was not exceeded: sum of costs <= max_cost
+    total_spent = sum(costs_incurred)
+    if total_spent > 1.5:
+        print(
+            f"FAIL ARM-3: cap exceeded — total spent {total_spent} > max_cost 1.5"
+        )
+        return False
+
+    # 3b2. A truncated (budget-stopped) result must NOT be reportable as clean.
+    # may_report_clean() must be False when coverage was not earned.
+    may_clean_trunc = getattr(result, "may_report_clean", None)
+    if may_clean_trunc is None:
+        print("FAIL ARM-3: result has no may_report_clean() method")
+        return False
+    if may_clean_trunc() is not False:
+        print(
+            f"FAIL ARM-3: truncated result has may_report_clean()=={may_clean_trunc()!r}; "
+            f"expected False (chunks_reviewed={result.chunks_reviewed}, "
+            f"chunks_total={result.chunks_total}, chunks_failed={getattr(result, 'chunks_failed', '?')})"
+        )
+        return False
+
+    # ------------------------------------------------------------------
+    # 3c. A client that always raises → chunks_failed==chunks_total,
+    #     chunks_reviewed==0, and may_report_clean() is False.
+    # ------------------------------------------------------------------
+    def always_raises(prompt: str, per_call_cap: float) -> "tuple[str, float]":
+        raise RuntimeError("always fails")
+
+    try:
+        result_fail = review_source(
+            source, always_raises,
+            file="arm3_fail.py",
+            max_cost=100.0,
+            per_call_ceiling=1.0,
+            chunk_lines=40,
+            overlap_lines=10,
+        )
+    except Exception as exc:
+        print(f"FAIL ARM-3: review_source raised unexpectedly on always-raises client: {exc}")
+        return False
+
+    chunks_total = result_fail.chunks_total
+    chunks_failed = getattr(result_fail, "chunks_failed", None)
+    chunks_reviewed = result_fail.chunks_reviewed
+
+    if chunks_failed is None:
+        print("FAIL ARM-3: result has no chunks_failed field")
+        return False
+
+    if chunks_failed != chunks_total:
+        print(
+            f"FAIL ARM-3: expected chunks_failed == chunks_total ({chunks_total}) "
+            f"but got chunks_failed={chunks_failed}"
+        )
+        return False
+
+    if chunks_reviewed != 0:
+        print(
+            f"FAIL ARM-3: expected chunks_reviewed == 0 but got chunks_reviewed={chunks_reviewed}"
+        )
+        return False
+
+    may_clean = getattr(result_fail, "may_report_clean", None)
+    if may_clean is None:
+        print("FAIL ARM-3: result has no may_report_clean() method")
+        return False
+
+    if may_clean() is not False:
+        print(
+            f"FAIL ARM-3: expected may_report_clean() to be False after all-failing client, "
+            f"got {may_clean()!r}"
         )
         return False
 

@@ -7,11 +7,120 @@ honest record of **what was asked for**, increment by increment, in order.
 context: they describe interfaces that already exist under `src/`, and later modules should
 conform to those rather than invent their own.
 
-Increment 4 is currently ACTIVE.
+Increment 5 is currently ACTIVE.
 
 ---
 
-# ⬅ ACTIVE — Increment 4: `src/review.py`, the review engine
+# ⬅ ACTIVE — Increment 5: make the engine's guarantees real
+
+Four changes, all in the same two files. **Each one is a guarantee that is currently stated
+but not enforced**, which is the only kind of change this project exists to make.
+
+## A — `src/findings.py`: freeze `Finding`
+
+`Finding` becomes `@dataclass(frozen=True)`. Construction is then the only door, which makes
+the existing validation the *only* validation point rather than a narrow one.
+
+⚠ **`__post_init__` currently assigns** (`self.severity = validate_severity(...)`), and a frozen
+dataclass blocks that — including from its own constructor. Use `object.__setattr__`, or move
+normalisation so it happens before the instance exists. **Grep for any existing assignment to a
+`Finding` field first**; a freeze that breaks a caller is a red pointing at the wrong person.
+
+⚠ **Do NOT make the comparators total** (e.g. `SEVERITY_RANKS.get(sev, -1)`). That converts a
+loud failure into a silent one: a bad severity would sort as lowest, a wrong order with no
+signal anywhere. **Keep them strict.**
+
+## B — `src/review.py`: a clean result must EARN its coverage
+
+Today a chunk that **fails** still counts as reviewed. Fix it structurally, not by adjusting a
+number:
+
+1. **A failed chunk does not increment `chunks_reviewed`.** A failure is not a review.
+2. **Add `chunks_failed: int = 0` to `ScanResult`** (and to `as_dict()`). A failure must live in
+   a **field**, not only in a free-text message — `error` is a message, not a field, and a caller
+   who reads the fields designed for this question is currently being told something false.
+3. 🔒 **And the structural half: a clean report must require complete coverage.** Add
+
+   ```python
+   def may_report_clean(self) -> bool:
+       """True ONLY when the whole source was reviewed with no failures."""
+   ```
+
+   true **only** when `chunks_failed == 0` **and**
+   `chunks_reviewed + chunks_failed == chunks_total`.
+
+   **Fixing the counter and leaving a clean result reachable is the same defect with better
+   bookkeeping.** The verdict must not be available until coverage has been earned.
+   *Precedent for the shape: a failed target call currently emits a verified-clean verdict in the
+   guard spec — this is that fix, applied here.*
+4. `truncated` is set on any failure — but **(3) is the enforcement; `truncated` is a signal.**
+   Do not let the signal do the enforcing.
+
+## C — `src/review.py`: make the spend cap actually hold
+
+The cap cannot be guaranteed while a call's price is unknown. It can be guaranteed if the
+**provider** enforces a per-call limit — so route it there.
+
+- **`ReviewClient` takes the per-call cap:** `Callable[[str, float], tuple[str, float]]` —
+  `(prompt, per_call_cap) -> (response_text, cost)`.
+- **`review_source` gains a required keyword-only `per_call_ceiling: float`** — the most a single
+  call is allowed to cost. No default (`TypeError` if omitted); `ValueError` if `None` or `<= 0`.
+- **Refuse to start a call when `max_cost - total_cost < per_call_ceiling`.** Refuse — do **not**
+  start the call and truncate its output. If the worst case cannot be afforded, the call does not
+  begin.
+- Otherwise compute `per_call_cap = min(per_call_ceiling, max_cost - total_cost)` and **pass it to
+  the client**, which passes it to the provider's own per-call limit and lets the provider enforce it.
+
+🔒 **In the module docstring, state the guarantee AND the mechanism that makes it true.** Name the
+provider's per-call limit explicitly. **The defect being fixed here was a specification that named
+an outcome and omitted the mechanism — do not repeat it in the fix for it.**
+
+## D — `src/review.py`: one invariant, one enforcement site
+
+Once (B) fixes the counters at the source, the derived fallback that re-sets `truncated` after the
+loop **is no longer needed — remove it.**
+
+⚠ **A defended invariant with an untested backstop is weaker than a single one, because it hides a
+mutant:** a mutant at either site alone is invisible, so an arm passes while the invariant is
+broken. **One invariant, one site, individually falsifiable.**
+
+## E — `tests/arms.py`: close the gaps these fixes expose
+
+- **ARM-1** additionally asserts that assigning to a `Finding` field raises
+  **`dataclasses.FrozenInstanceError` specifically** — it subclasses `AttributeError`, so a bare
+  `except AttributeError` would pass vacuously on any attribute typo. Keep the ≥2-element sort arm.
+- **ARM-3** additionally asserts **the cap was not exceeded** (sum of the fake client's costs
+  `<= max_cost`), and that a client which **always raises** yields
+  `chunks_failed == chunks_total`, `chunks_reviewed == 0`, and **`may_report_clean()` is `False`**.
+  Update the fake clients to the new two-argument protocol.
+
+## Self-tests
+
+`python src/review.py`, `python src/findings.py`, `python src/chunk.py` all exit 0, and
+**`review.py`'s self-test still spends nothing.**
+
+## THE PROOF OBLIGATION
+
+`tests/arms.py <path>` against a known-bad copy — **one mutant per guarantee**, and each mutant
+changes **exactly one named thing**:
+
+1. **`may_report_clean`** made to ignore coverage → ARM-3 must FAIL.
+2. **the pre-call affordability refusal** removed → ARM-3's cap assertion must FAIL.
+3. **`frozen=True`** removed from `Finding` → ARM-1's freeze assertion must FAIL.
+
+Put the three mutants in `<mutant-dir>/`, and run `python tests/arms.py src` → all PASS and exit 0.
+**Report every run verbatim with its exit code, and state what you changed in each mutant.**
+⚠ Confirm each mutation is actually present in its copy **before** running the arm — a mutant
+whose anchor went stale tests nothing, and reports as a verified arm.
+
+## Acceptance
+
+- `python tests/arms.py src` exits **0**; `python tests/arms.py <mutant-dir>` exits **non-zero**
+- Standard library only; `tests/arms.py` and the three `src/` modules are the only files touched
+
+---
+
+# Increment 4: `src/review.py`, the review engine — ✅ DONE
 
 Chunks a source file, sends each chunk out for review, and turns what comes back into `Finding`
 objects whose line numbers point at **the file the reader will actually open**.
