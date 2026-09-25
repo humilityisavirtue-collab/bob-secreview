@@ -7,3 +7,8 @@ __pycache__/
 venv/
 .bob/
 mutant*/
+
+# Vercel project link — local only, never commit
+.vercel/
+
+.vercel

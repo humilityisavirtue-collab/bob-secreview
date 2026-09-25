@@ -1,0 +1,6 @@
+# No third-party dependencies.
+#
+# src/prove_bites.py and src/findings.py are pure standard library: dataclasses,
+# difflib, typing, json. That is deliberate -- the non-vacuity harness has to be
+# auditable by reading it, and a dependency list is one more thing a reader would
+# have to trust.

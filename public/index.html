@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secreview — a reviewer whose all-clear is earned</title>
+<meta name="description" content="A review harness that refuses to trust a reviewer until it proves it can discriminate between a flawed file and the same file with the flaw removed.">
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --line:#262d38; --ink:#e6edf3; --dim:#8b949e;
+    --bite:#3fb950; --nobite:#d29922; --incon:#8b949e; --accent:#58a6ff;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#ffffff; --panel:#f6f8fa; --line:#d8dee4; --ink:#1f2328;
+           --dim:#59636e; --bite:#1a7f37; --nobite:#9a6700; --incon:#59636e; --accent:#0969da; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
+       padding:0 16px}
+  main{max-width:860px;margin:0 auto;padding:56px 0 80px}
+  h1{font-size:1.6rem;line-height:1.25;margin:0 0 .4rem;letter-spacing:-.01em}
+  .sub{color:var(--dim);margin:0 0 2.2rem;font-size:1.02rem}
+  h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);
+     font-weight:600;margin:2.6rem 0 .9rem}
+  p{margin:0 0 1rem}
+  code,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em;
+           background:var(--panel);border:1px solid var(--line);border-radius:5px;
+           padding:.08em .38em}
+  .rows{border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .row{display:grid;grid-template-columns:120px 1fr 132px;gap:14px;align-items:baseline;
+       padding:13px 16px;border-top:1px solid var(--line);background:var(--panel)}
+  .row:first-child{border-top:0}
+  .who{font-weight:600;font-size:.92rem}
+  .why{color:var(--dim);font-size:.88rem}
+  .verdict{text-align:right;font-weight:700;font-size:.82rem;letter-spacing:.03em}
+  .BITES{color:var(--bite)} .DOES_NOT_BITE{color:var(--nobite)} .INCONCLUSIVE{color:var(--incon)}
+  .trust{display:block;font-weight:400;font-size:.74rem;color:var(--dim);margin-top:2px}
+  .meta{color:var(--dim);font-size:.82rem;margin-top:.7rem}
+  .meta b{color:var(--ink);font-weight:600}
+  .err{color:var(--nobite)}
+  footer{margin-top:3rem;padding-top:1.4rem;border-top:1px solid var(--line);
+         color:var(--dim);font-size:.88rem}
+  a{color:var(--accent)}
+  @media (max-width:560px){
+    .row{grid-template-columns:1fr;gap:4px}
+    .verdict{text-align:left}
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>A reviewer whose all-clear is earned</h1>
+  <p class="sub">Not “no vulnerabilities found” — <em>a reviewer that has proved it can tell the difference.</em></p>
+
+  <p>An AI reviewer’s normal output is <code>no findings</code>, which is indistinguishable
+  from a reviewer that simply does not work. So before this one is allowed to report clean,
+  it must first catch a flaw in a known-bad file — <strong>and stay silent on the same file
+  with only that one flaw removed.</strong></p>
+
+  <p>That second half is the part everybody skips. Catching a planted bug is a magic word.
+  Catching it <em>and not</em> catching it in the unflawed twin is discrimination.</p>
+
+  <h2>Live: five reviewers, one flaw</h2>
+  <div class="rows" id="rows"><div class="row"><span class="who">…</span>
+    <span class="why">running the harness</span><span class="verdict">…</span></div></div>
+  <div class="meta" id="meta"></div>
+
+  <h2>What you are looking at</h2>
+  <p>The reviewers above are <strong>not model calls</strong>. They are injected callables —
+  one honest, one that emits the planted rule on every input, one that reads file length
+  instead of code, and one that reviewed nothing at all. The page costs nothing to click and
+  returns in milliseconds, because the subject is the <em>harness</em>.</p>
+
+  <p>Only the honest reviewer earns <code>may_trust_clean()</code>. The constant and the
+  length-reader are refused for reporting the flaw everywhere — including on a file that does
+  not have it. The partial reviewer is refused for a different reason: it never reviewed the
+  file, and the engine will not certify coverage it did not get.</p>
+
+  <p><strong>The twin is not in this page and not in the repository.</strong> It is supplied by
+  the caller, by path. Two files in one tree means comparing them <em>is</em> the answer — and
+  you can verify that claim by looking at the repository, where the twin is absent.</p>
+
+  <footer>
+    <p>The shipped harness runs behind this page, imported from the repository rather than
+    reimplemented for the demo: <code>src/prove_bites.py</code>, <code>src/findings.py</code>.</p>
+    <p><a href="https://github.com/humilityisavirtue-collab/bob-secreview">Repository</a>
+    &nbsp;·&nbsp; built for the IBM Bob 2.0 Hackathon</p>
+  </footer>
+</main>
+
+<script>
+const el = document.getElementById('rows');
+const meta = document.getElementById('meta');
+
+function verdictCell(p){
+  const trusted = p.trusted ? 'trusted' : 'not trusted';
+  return `<span class="verdict ${p.status}">${p.status.replace(/_/g,' ')}
+          <span class="trust">${trusted}</span></span>`;
+}
+
+fetch('/api/harness').then(r => r.json()).then(d => {
+  if (d.error){
+    el.innerHTML = `<div class="row"><span class="who">error</span>
+      <span class="why err">${d.error} — ${d.detail||''}</span>
+      <span class="verdict">—</span></div>`;
+    return;
+  }
+  const all = d.results.concat([d.one_sided]);
+  el.innerHTML = all.map(p => `
+    <div class="row">
+      <span class="who">${p.name}</span>
+      <span class="why">${p.blurb}${p.reason ? ' <em>'+p.reason+'</em>' : ''}</span>
+      ${verdictCell(p)}
+    </div>`).join('');
+
+  const h = d.results[0];
+  meta.innerHTML = `Twin: <b>${h.twin_hunks}</b> differing block ·
+    similarity <b>${h.twin_ratio}</b> vs a self-generated baseline of
+    <b>${h.twin_ratio_baseline}</b> · <b>${h.twin_lines_kept}</b> lines held in common.
+    The twin is accepted only when it is measurably closer to the source than a shuffled
+    copy of the source itself — no threshold to tune.`;
+}).catch(e => {
+  el.innerHTML = `<div class="row"><span class="who">unreachable</span>
+    <span class="why err">${e}</span><span class="verdict">—</span></div>`;
+});
+</script>
+</body>
+</html>

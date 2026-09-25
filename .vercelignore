@@ -1,0 +1,8 @@
+# Only what the function and the page need are deployed.
+#
+# src/ IS required -- api/harness.py imports the shipped modules rather than
+# reimplementing them. demo/ is public but the function does not read it.
+.git/
+bob_sessions/
+tests/
+demo/
