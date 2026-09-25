@@ -744,6 +744,94 @@ def arm4(prove_bites_path: str) -> bool:
             )
             return False
 
+    # ------------------------------------------------------------------
+    # 4j. Degenerate twin: INCONCLUSIVE, may_trust_clean() False
+    #
+    # 🔒 This arm enforces that the degeneracy check lives INSIDE the
+    # module, not in a number the caller must remember to inspect.
+    # A degenerate twin must yield INCONCLUSIVE regardless of what the
+    # reviewer says — including a reviewer that would "win" by relying
+    # on a vacuous control.
+    #
+    # Three cases:
+    #   j1 — empty string twin
+    #   j2 — unrelated tiny file as twin
+    #   j3 — file-length discriminator with empty twin (the defect from the
+    #         incident table: a reviewer with no capability earns BITES under
+    #         the old scheme; it must NOT earn BITES here)
+    # ------------------------------------------------------------------
+    EMPTY_TWIN_4J    = ""
+    UNRELATED_TWIN_4J = "import os\nprint(42)\n"
+
+    # j1: empty string twin
+    proof_empty = prove_bites_fn(rev_bites, SOURCE, planted_rule="planted-rule",
+                                 clean_source=EMPTY_TWIN_4J)
+    if proof_empty.status != "INCONCLUSIVE":
+        print(
+            f"FAIL ARM-4/4j1: empty-string twin expected INCONCLUSIVE, "
+            f"got {proof_empty.status!r}"
+        )
+        return False
+    if proof_empty.may_trust_clean() is not False:
+        print(
+            f"FAIL ARM-4/4j1: empty-string twin INCONCLUSIVE has "
+            f"may_trust_clean()=={proof_empty.may_trust_clean()!r}; expected False"
+        )
+        return False
+    print(
+        f"  ARM-4/4j1: empty twin -> status={proof_empty.status}, "
+        f"twin_ratio={getattr(proof_empty, 'twin_ratio', 'N/A')}"
+    )
+
+    # j2: unrelated tiny file as twin
+    proof_unrel = prove_bites_fn(rev_bites, SOURCE, planted_rule="planted-rule",
+                                 clean_source=UNRELATED_TWIN_4J)
+    if proof_unrel.status != "INCONCLUSIVE":
+        print(
+            f"FAIL ARM-4/4j2: unrelated-file twin expected INCONCLUSIVE, "
+            f"got {proof_unrel.status!r}"
+        )
+        return False
+    if proof_unrel.may_trust_clean() is not False:
+        print(
+            f"FAIL ARM-4/4j2: unrelated-file twin INCONCLUSIVE has "
+            f"may_trust_clean()=={proof_unrel.may_trust_clean()!r}; expected False"
+        )
+        return False
+    print(
+        f"  ARM-4/4j2: unrelated twin -> status={proof_unrel.status}, "
+        f"twin_ratio={getattr(proof_unrel, 'twin_ratio', 'N/A')}"
+    )
+
+    # j3: file-length discriminator with empty twin — must NOT be BITES
+    # This is the reviewer from the incident table that currently wins:
+    # it returns the planted rule iff source has more than N lines.
+    # With an empty twin it stays silent -> twin_hunks==1 -> old scheme: BITES.
+    # The new scheme must return INCONCLUSIVE because the twin is degenerate.
+    def rev_len_disc(src, file):
+        if len(src.splitlines()) > 1:
+            return _FakeScanResult(["planted-rule"])
+        return _FakeScanResult([])
+
+    proof_len = prove_bites_fn(rev_len_disc, SOURCE, planted_rule="planted-rule",
+                               clean_source=EMPTY_TWIN_4J)
+    if proof_len.status == "BITES":
+        print(
+            "FAIL ARM-4/4j3: file-length discriminator + empty twin must NOT be BITES; "
+            f"got {proof_len.status!r} with may_trust_clean()=={proof_len.may_trust_clean()!r}"
+        )
+        return False
+    if proof_len.may_trust_clean() is not False:
+        print(
+            f"FAIL ARM-4/4j3: file-length discriminator + empty twin: "
+            f"may_trust_clean()=={proof_len.may_trust_clean()!r}; expected False"
+        )
+        return False
+    print(
+        f"  ARM-4/4j3: length-discriminator + empty twin -> status={proof_len.status} "
+        f"(not BITES, may_trust_clean=False)"
+    )
+
     print("PASS ARM-4")
     return True
 

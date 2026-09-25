@@ -7,11 +7,185 @@ honest record of **what was asked for**, increment by increment, in order.
 context: they describe interfaces that already exist under `src/`, and later modules should
 conform to those rather than invent their own.
 
-Increment 8 is currently ACTIVE.
+Increment 9 is currently ACTIVE.
 
 ---
 
-# ⬅ ACTIVE — Increment 8: the harness must fail closed on a contaminated tree
+# ⬅ ACTIVE — Increment 9: the twin's integrity must be ENFORCED, not delegated
+
+## The defect, measured against the built module
+
+`prove_bites` decides whether the reviewer **discriminates** between a flawed file and a clean twin.
+If the "twin" it is handed is not actually a near-copy — an empty string, an unrelated file — then
+**the comparison proves nothing**, and the reviewer is being measured against a control that isn't a
+control.
+
+**Measured today, my instrument, on the shipped module:**
+
+| twin handed in | `twin_hunks` | status for a reviewer that only counts file LENGTH |
+|---|---|---|
+| honest twin (1 line changed) | 1 | DOES_NOT_BITE |
+| **empty string** | **1** | **BITES, `may_trust_clean()` TRUE** |
+| **unrelated tiny file** | **1** | **BITES, `may_trust_clean()` TRUE** |
+
+A reviewer with **no capability whatsoever** — it returns the planted rule iff the file has more
+than 20 lines — earns **`BITES`** and a trusted verdict, **while the check the caller was told to
+make (`twin_hunks == 1`) reads GREEN.**
+
+⚠ **`twin_hunks` counts SequenceMatcher OPCODES, not differing lines — and a TOTAL mismatch is ONE
+opcode.** So it is 1 for a perfect twin *and* 1 for an empty string. **It cannot distinguish the two
+at any threshold.**
+
+## A 🔒 Enforce it INSIDE, and drop the proxy
+
+1. **Compute `twin_ratio`** — the line-similarity between `source` and `clean_source` — **inside
+   `prove_bites`**, and return **`INCONCLUSIVE`** (never `BITES`) when the twin is **degenerate**:
+   the control is not a near-copy of the target, so no discrimination can be established.
+   `reason` must say the twin was not a usable control.
+2. **Expose `twin_ratio: float` and `twin_lines_kept: int` on `BiteProof`.**
+3. 🔒 **Enforcement lives inside the module, not in a number the caller must remember to check.**
+   ⚠ **A count the caller has to inspect, sitting one step away from the degeneracy that breaks it,
+   is exactly the shape already fixed twice in this build.** The caller's green must not be able to
+   coexist with a broken control.
+4. ⚠ **Do NOT "fix" this by tightening `twin_hunks`.** An opcode count is **the wrong quantity at
+   any threshold** — it is 1 for an empty string and 1 for a perfect twin. Tightening it moves a
+   number without adding discrimination. **Leave `twin_hunks` exposed and stop relying on it.**
+
+## B 🔒 Measure the floor — do not adopt one
+
+Choose the threshold **from measurement**, and **print the value you chose**:
+
+- measure `twin_ratio` for **the honest twin** (the case that must pass)
+- measure it for **each degenerate case** (empty, unrelated, one line)
+- **state the gap and where the floor sits inside it**
+
+⚠ **A floor of "about a half" is a guess**; the honest-twin value is the thing to calibrate against.
+**A threshold you cannot show separates the two populations is the same defect as an unmeasured one.**
+Carry the measured numbers in the self-test's output so the floor is visible, not asserted.
+
+## C 🔒 The twin call must not reuse the source's `file` label
+
+Measured: `review(clean_source, file)` passes the **source's** label, so the reviewer sees
+`['x.py', 'x.py']`. **A reviewer that caches by filename returns the source's findings for the twin
+call** — and the module then reports a **correct** reviewer as `DOES_NOT_BITE`.
+
+⚠ **That is a false negative — the direction that WEAKENS the proof**, and it turns a good reviewer
+away. Give the twin its own label (`f"{file}.twin"` is fine).
+
+## D Self-test (required)
+
+`if __name__ == "__main__":`, fake reviewers only, **no spend**. Add:
+
+- an **empty-string** twin → **`INCONCLUSIVE`**, `may_trust_clean()` False
+- an **unrelated tiny file** as twin → **`INCONCLUSIVE`**, trusted False
+- a **file-length discriminator** with an empty twin → **must NOT be `BITES`** *(this is the
+  reviewer that currently wins)*
+- the honest twin → still `BITES`, trusted True, and print its `twin_ratio`
+- **print every measured `twin_ratio` and the floor** so the separation is visible in the output
+
+## E THE PROOF OBLIGATION
+
+1. **`tests/arms.py src`** → all arms PASS, exit 0. **ARM-4 must additionally assert** that a
+   degenerate twin yields `INCONCLUSIVE` and `may_trust_clean()` False — **so the arm can fail on
+   this**, not just the self-test.
+2. **A mutant that removes the degeneracy check** (so a degenerate twin is scored normally) →
+   **ARM-4 must FAIL.** Name the mutation, verify it is present in the copy before running.
+3. Report every run with its exit code.
+
+## Acceptance
+
+- `python src/prove_bites.py` exits 0 and **spends nothing**
+- `python tests/arms.py src` exits **0**; the degeneracy mutant → **non-zero**
+- Standard library only
+
+---
+
+# Increment 10 (NEXT, not yet active): `src/mcp_server.py`
+
+The brief below is written and ready; **it is not the current task.** Full text retained.
+
+---
+
+# Increment 9 (superseded brief): `src/mcp_server.py` — the review engine as an MCP server
+
+## Why
+
+The engine is currently only reachable by importing it. An MCP server makes it a **tool** any
+agent host can call — which is how the reviewer gets used by anything other than a person.
+
+## Deliverable — `src/mcp_server.py`
+
+A **JSON-RPC 2.0 server over stdin/stdout**, standard library only, implementing the MCP handshake
+and tools surface:
+
+- `initialize` → protocol version, server info, and a `tools` capability
+- `tools/list` → one tool, `scan_file`
+- `tools/call` → dispatch, and an **MCP error** (not a crash, not a silent default) for anything
+  malformed
+
+`scan_file` input schema — **`max_cost` and `per_call_ceiling` are `required`**:
+
+| param | type | required |
+|---|---|---|
+| `path` | string | ✅ |
+| `max_cost` | number | 🔒 ✅ |
+| `per_call_ceiling` | number | 🔒 ✅ |
+| `chunk_lines` | integer | optional |
+
+🔒 **THE RUNTIME CAP IS REQUIRED ON EVERY ENTRY POINT, AND THERE IS NO SERVER-SIDE DEFAULT.**
+Every chunk is a **paid call**. A reviewer that silently spends is a worse failure than one that
+refuses to start, and it is the only failure here that costs money while nobody is watching.
+**`required` in the schema AND validated in the handler** — a schema is documentation to a client
+that ignores it, so the handler must refuse too. A missing, null, zero or negative cap → **MCP
+error**, naming which parameter.
+
+### The server must not own a review client
+
+`build_server(client)` takes a **client factory** and the server never imports one itself. The
+transport is testable without a provider, and **the self-test must never spend anything**.
+
+### A non-clean result must not come back reading clean
+
+The `tools/call` result must carry, for every scan: `chunks_total`, `chunks_reviewed`,
+`chunks_failed`, `truncated`, `total_cost`, `may_report_clean()`, and the findings. 🔒 **A result
+that is not clean must be visibly not clean in what the tool returns** — the caller must not have
+to know to ask. **Summarise nothing away.**
+
+### Errors
+
+- unknown method → JSON-RPC error `-32601`
+- unknown tool → MCP error, not a traceback
+- a bad or missing `path` → error naming it
+- an exception inside the review → an MCP error carrying the message; **never a crash of the
+  server loop, and never a clean-looking result**
+
+⚠ **One JSON object per line on stdout.** Anything written to stdout that is not a protocol frame
+corrupts the stream — **diagnostics go to stderr.**
+
+## Self-test (required)
+
+`if __name__ == "__main__":` — one `PASS`/`FAIL` per check, exit 0 only if all pass. **Drive the
+server over in-memory pipes with a fake client; make no real call and spend nothing.** Cover:
+
+- `initialize` and `tools/list` return well-formed frames
+- `scan_file` **without `max_cost`** → error, and **the fake client was never called**
+- `scan_file` **without `per_call_ceiling`** → error, client never called
+- `scan_file` with a zero/negative cap → error, client never called
+- a successful scan returns the coverage fields, and `may_report_clean()` agrees with the result
+- a scan whose review was truncated/failed is **not** reported as clean
+- an unknown method → `-32601`; an unknown tool → error
+- **an exception inside a scan does not kill the loop** — a following request still gets an answer
+- stdout carries protocol frames only
+
+## Acceptance
+
+- `python src/mcp_server.py` exits 0 and **spends nothing**
+- `python tests/arms.py src` still exits **0** (this increment does not change the other modules)
+- Standard library only; new file `src/mcp_server.py`
+
+---
+
+# Increment 8: the harness must fail closed on a contaminated tree — ✅ DONE
 
 Both changes are in `tests/arms.py`. **No `src/` behaviour changes.**
 
