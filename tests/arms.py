@@ -7,14 +7,120 @@ Usage:
 review.py. The modules are imported from that path; standard library only.
 
 Exit 0 only if all arms pass.
+
+Manifest and contamination check (Increment 8)
+-----------------------------------------------
+When <path> is a directory, the harness builds a manifest of every module file
+it finds there and compares each against the same-named file in src/.  A file
+that differs from src/ is *mutated* and must be declared in a MUTANT.json in
+that directory; otherwise the harness REFUSES to run any arms (non-zero exit,
+no arm output).
+
+The src/ subject itself needs no MUTANT.json (nothing is mutated), but the
+manifest is still printed.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import importlib.util
+import json as _json_stdlib
 import os
 import sys
+
+
+# ---------------------------------------------------------------------------
+# Manifest and contamination check — Part A of Increment 8
+# ---------------------------------------------------------------------------
+
+# The set of module files the harness knows about.
+_MODULE_FILES = ("findings.py", "chunk.py", "review.py", "prove_bites.py")
+
+
+def _sha256(path: str) -> str:
+    """Return the hex SHA-256 digest of the file at *path*."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(65536), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _check_manifest(subject_dir: str) -> bool:
+    """Print the manifest for *subject_dir* and refuse if any undeclared mutation exists.
+
+    Returns True if the arms may proceed, False if they must be refused.
+
+    Rules:
+    - For every module file present in subject_dir, compare its content (by
+      sha256) against the same-named file in src/.
+    - Files that match src/ are labelled IDENTICAL.
+    - Files that differ from src/ are labelled DECLARED-MUTATED if they appear
+      in MUTANT.json, or UNDECLARED-MUTATION otherwise.
+    - Any UNDECLARED-MUTATION → print the offending file, the declared set, and
+      return False (refuse to run arms).
+    - A missing MUTANT.json on a directory that has any mutation is also a
+      refusal.
+    - The src/ directory itself needs no MUTANT.json (nothing is mutated).
+    """
+    # Locate src/ relative to this script's own directory.
+    arms_dir = os.path.dirname(os.path.abspath(__file__))
+    src_dir = os.path.abspath(os.path.join(arms_dir, "..", "src"))
+
+    # Load MUTANT.json if present.
+    mutant_json_path = os.path.join(subject_dir, "MUTANT.json")
+    declared_files: set[str] = set()
+    if os.path.isfile(mutant_json_path):
+        try:
+            with open(mutant_json_path, encoding="utf-8") as fh:
+                mutant_data = _json_stdlib.load(fh)
+            for entry in mutant_data.get("mutations", []):
+                declared_files.add(entry.get("file", ""))
+        except Exception as exc:
+            print(f"ERROR: could not parse MUTANT.json in {subject_dir!r}: {exc}")
+            return False
+
+    print("=== MANIFEST ===")
+    undeclared: list[str] = []
+
+    for fname in _MODULE_FILES:
+        subject_file = os.path.join(subject_dir, fname)
+        src_file = os.path.join(src_dir, fname)
+
+        if not os.path.isfile(subject_file):
+            # File not present in subject dir — skip it.
+            continue
+
+        sha = _sha256(subject_file)
+
+        if not os.path.isfile(src_file):
+            # No src/ counterpart — treat as IDENTICAL (no basis for comparison).
+            print(f"  {fname}  sha256={sha[:16]}...  IDENTICAL (no src counterpart)")
+            continue
+
+        src_sha = _sha256(src_file)
+
+        if sha == src_sha:
+            print(f"  {fname}  sha256={sha[:16]}...  IDENTICAL")
+        elif fname in declared_files:
+            print(f"  {fname}  sha256={sha[:16]}...  DECLARED-MUTATED")
+        else:
+            print(f"  {fname}  sha256={sha[:16]}...  UNDECLARED-MUTATION")
+            undeclared.append(fname)
+
+    print("=== END MANIFEST ===")
+
+    if undeclared:
+        print()
+        print("REFUSE: the following file(s) differ from src/ but are NOT declared in MUTANT.json:")
+        for fname in undeclared:
+            print(f"  {fname}")
+        print(f"Declared set: {sorted(declared_files) if declared_files else '(MUTANT.json absent or empty)'}")
+        print("No arms were run.")
+        return False
+
+    return True
 
 
 def _load_module(name: str, path: str):
@@ -381,16 +487,21 @@ def arm3(review_path: str) -> bool:
     # This is the KEY arm: the defect is that chunks_reviewed is incremented
     # even when parsing fails, making may_report_clean() return True while
     # error is populated.
+    # Also asserts chunks_failed == chunks_total (total failure: 1 chunk, 1 parse error).
     def client_a2(prompt: str, cap: float) -> "tuple[str, float]":
         return "This is a security assessment. No findings were identified.", 0.01
 
     r_a2 = review_source(small_source, client_a2, file="a2.py",
                          max_cost=10.0, per_call_ceiling=1.0,
                          chunk_lines=40, overlap_lines=0)
-    a2_ok = (r_a2.may_report_clean() is False) and bool(r_a2.error)
+    a2_chunks_failed = getattr(r_a2, "chunks_failed", None)
+    # chunks_failed == chunks_total: every chunk's response failed to parse.
+    a2_cf_ok = (a2_chunks_failed is not None) and (a2_chunks_failed == r_a2.chunks_total)
+    a2_ok = (r_a2.may_report_clean() is False) and bool(r_a2.error) and a2_cf_ok
     arm_results["A2"] = a2_ok
     print(f"{'PASS' if a2_ok else 'FAIL'} ARM-3/A2: prose -> not clean "
-          f"(may_report_clean={r_a2.may_report_clean()}, error={r_a2.error!r})")
+          f"(may_report_clean={r_a2.may_report_clean()}, error={r_a2.error!r}, "
+          f"chunks_failed={a2_chunks_failed}, chunks_total={r_a2.chunks_total})")
 
     # A3 — client returns bare [] (honest empty review) -> clean, no findings
     # CONTROL: an honest empty review MUST remain clean. A fix that makes every
@@ -427,6 +538,7 @@ def arm3(review_path: str) -> bool:
     # A5 — two-chunk source; chunk 0 returns prose (parse error), chunk 1 returns []
     # The first chunk's failure means we do NOT hold parsed output for the whole
     # source -> may_report_clean() must be False.
+    # Also asserts chunks_failed == 1 and chunks_reviewed == chunks_total - 1 (partial failure).
     two_chunk_source = "\n".join(f"line{i}" for i in range(1, 71))  # 70 lines, chunk=40, overlap=0 -> 2 chunks
     call_count_a5 = [0]
 
@@ -442,10 +554,16 @@ def arm3(review_path: str) -> bool:
     r_a5 = review_source(two_chunk_source, client_a5, file="a5.py",
                          max_cost=10.0, per_call_ceiling=1.0,
                          chunk_lines=40, overlap_lines=0)
-    a5_ok = (r_a5.may_report_clean() is False) and bool(r_a5.error)
+    a5_chunks_failed = getattr(r_a5, "chunks_failed", None)
+    # chunks_failed == 1 (first chunk parse error); chunks_reviewed == chunks_total - 1 (second chunk ok).
+    a5_cf_ok = (a5_chunks_failed is not None) and (a5_chunks_failed == 1)
+    a5_cr_ok = (r_a5.chunks_reviewed == r_a5.chunks_total - 1)
+    a5_ok = (r_a5.may_report_clean() is False) and bool(r_a5.error) and a5_cf_ok and a5_cr_ok
     arm_results["A5"] = a5_ok
     print(f"{'PASS' if a5_ok else 'FAIL'} ARM-3/A5: prose then [] -> not clean "
-          f"(may_report_clean={r_a5.may_report_clean()}, error={r_a5.error!r})")
+          f"(may_report_clean={r_a5.may_report_clean()}, error={r_a5.error!r}, "
+          f"chunks_failed={a5_chunks_failed}, chunks_reviewed={r_a5.chunks_reviewed}, "
+          f"chunks_total={r_a5.chunks_total})")
 
     if not all(arm_results.values()):
         failed = [k for k, v in arm_results.items() if not v]
@@ -644,6 +762,14 @@ if __name__ == "__main__":
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(2)
+
+    # Manifest + contamination check (Part A, Increment 8).
+    # Only runs when the argument is a directory; a single-file argument bypasses it.
+    subject_arg = os.path.abspath(sys.argv[1])
+    if os.path.isdir(subject_arg):
+        if not _check_manifest(subject_arg):
+            sys.exit(1)
+        print()  # blank line between manifest and arm output
 
     results = [
         arm1(findings_path),

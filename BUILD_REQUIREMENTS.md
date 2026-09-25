@@ -7,11 +7,91 @@ honest record of **what was asked for**, increment by increment, in order.
 context: they describe interfaces that already exist under `src/`, and later modules should
 conform to those rather than invent their own.
 
-Increment 7 is currently ACTIVE.
+Increment 8 is currently ACTIVE.
 
 ---
 
-# ⬅ ACTIVE — Increment 7: `src/prove_bites.py` — the reviewer must DISCRIMINATE
+# ⬅ ACTIVE — Increment 8: the harness must fail closed on a contaminated tree
+
+Both changes are in `tests/arms.py`. **No `src/` behaviour changes.**
+
+## Why — a real failure from this build, not a hypothetical
+
+The proof for the last increment pointed `tests/arms.py` at a mutant directory which **still held a
+mutant of a DIFFERENT module from the previous increment.** The arm for the old module failed, for
+reasons that had nothing to do with the module under test, and **the failure looked like a
+legitimate red.** The verdict was produced from a tree nobody had declared.
+
+Two distinct harms, and the second is worse:
+- a **leak** costs you the demo — something can read the answer;
+- a **stale mutant** costs you the **finding** — silently, by making an arm fail for an unrelated
+  reason, and **no amount of re-reading the instrument reveals it**, because the instrument is fine
+  and its *subject* is not what the caller believes.
+
+## A 🔒 A non-`src` subject must DECLARE its mutations, and be refused if it does not
+
+When `tests/arms.py <path>` is given a directory, the harness must:
+
+1. **Build a manifest of the subject** — for every module file in `<path>`, compare it **by content**
+   against the same-named file in `src/`.
+2. **If every file matches `src/`** — run normally.
+3. **If a file differs from `src/`** — that file is *mutated*, and it must be **declared** in a
+   `MUTANT.json` in that directory:
+   ```json
+   {"mutations": [{"file": "prove_bites.py", "change": "may_trust_clean forced True"}]}
+   ```
+4. 🔒 **ANY file that differs from `src/` and is NOT declared → REFUSE.** Print which file differs,
+   print the declared set, **run no arms, and exit non-zero.** A missing `MUTANT.json` on a
+   non-`src` subject is a refusal, not a default-allow.
+5. **Print the manifest before the arms run** — every subject file, its sha256, and whether it is
+   identical or declared-mutated. **The subject must be visible in the output**, so a contaminated
+   tree is diagnosable from the transcript and not only from the exit code.
+
+⚠ **A mutant directory with no `MUTANT.json` must NOT be silently accepted.** That is the exact
+condition that produced the contaminated verdict, and the whole point of this part is that it
+**cannot pass quietly**.
+⚠ The `src/` subject needs no `MUTANT.json` (nothing is mutated) — but the manifest must still print.
+
+## B 🔒 ARM-3 must assert `chunks_failed` on the parse path
+
+`chunks_failed` is the field that makes a failed chunk **legible**. Today the arms assert it only for
+a client that **raises**; **nothing asserts it when a response fails to PARSE.** A regression that
+blanks it there passes every arm we have.
+
+- **A2** (client returns prose) → assert **`chunks_failed == chunks_total`**.
+- **A5** (prose, then `[]`) → assert **`chunks_failed == 1`** and **`chunks_reviewed == chunks_total - 1`**.
+
+⚠ **A2 and A5 are different shapes** — a total failure and a partial one — and only one of them
+currently has a witness. Assert both, and print the values.
+
+**The property:** the mechanism that *enforces* the verdict is the counter's placement; the field
+that *reports* the failure is `chunks_failed`. **Only the enforcing one is tested.** A regression
+that blanks the reporter is invisible **at exactly the moment the report is what you need.**
+
+## THE PROOF OBLIGATION
+
+1. **Contamination refusal:** build a mutant directory with a mutation that is **NOT** declared in
+   its `MUTANT.json` (or with no `MUTANT.json` at all) → **`tests/arms.py` must REFUSE**: non-zero
+   exit, **no arm output**, and it must **name the undeclared file.**
+2. **Declared mutant still runs:** the same directory **with** a correct `MUTANT.json` → the arms
+   run and produce their normal verdict.
+3. **`chunks_failed` arm bites:** mutate `review.py` so the parse handler **does not** increment
+   `chunks_failed` → **the A2/A5 assertions must FAIL.**
+   ⚠ **Verify this mutation is present in the copy before running** — a mutation that does not land
+   is a mutant you did not run.
+4. `python tests/arms.py src` → all arms PASS, exit 0.
+
+Report every run verbatim with its exit code, and **state what you changed in each mutant.**
+
+## Acceptance
+
+- `python tests/arms.py src` exits **0**; undeclared-mutation dir → **non-zero with no arms run**
+- `python src/review.py` and the other `src/` self-tests still exit 0 and **spend nothing**
+- Standard library only; **`tests/arms.py` is the only file changed**
+
+---
+
+# Increment 7: `src/prove_bites.py` — the reviewer must DISCRIMINATE — ✅ DONE
 
 ## Why the obvious version of this module is vacuous
 
