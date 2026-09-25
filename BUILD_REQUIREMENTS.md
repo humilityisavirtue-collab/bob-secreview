@@ -7,11 +7,185 @@ honest record of **what was asked for**, increment by increment, in order.
 context: they describe interfaces that already exist under `src/`, and later modules should
 conform to those rather than invent their own.
 
-Increment 5 is currently ACTIVE.
+Increment 6 is currently ACTIVE.
 
 ---
 
-# ⬅ ACTIVE — Increment 5: make the engine's guarantees real
+# ⬅ ACTIVE — Increment 6: `chunks_reviewed` must mean "we hold its output"
+
+A chunk whose response we **cannot parse** is still counted as reviewed. So a client that returns
+prose rather than JSON produces a result that reports **complete coverage with zero findings** —
+while `error` is populated. The gate and the evidence disagree, and the gate is what decides.
+
+## A — `src/review.py`
+
+`chunks_reviewed` must mean **"chunks whose output we actually hold."** The increment currently
+sits **above** the parse step, so it has already run by the time parsing fails.
+
+- Move the `chunks_reviewed += 1` so it happens only **after** the response has been successfully parsed.
+- Increment **`chunks_failed`** in the parse-failure handler, exactly as the raise handler does.
+
+⚠ **Do NOT "fix" this by adding a second check somewhere else.** One property, **one site**. A
+redundant backstop that no test reaches makes an individual mutant invisible — that is the defect
+this replaces, not the fix for it.
+
+⚠ **Leave `error` set on a parse failure, and leave the field in place.** It is not redundant:
+it is the clause that keeps an unparseable run legible as incomplete, and removing it as
+"tidying" would silently re-open a vacuous clean inside the module that exists to prevent vacuous
+cleans. **Note that in the code, so nobody deletes it.**
+
+## B — `src/findings.py`: make the spend reportable
+
+`ScanResult` gains **`total_cost: float = 0.0`** and **`max_cost: float = 0.0`** (defaults, and in
+`as_dict()`). Today an over-spend is **recorded nowhere** — a client returning 1.0, 0.99 or 5.0
+against a cap of 1.0 produces an indistinguishable result.
+
+⚠ **State the guarantee you can actually make, and name the mechanism.** The honest promise is
+*"no call is started that could not be afforded, and the total is reported."* Do **not** claim
+"the cap is never exceeded" — a token-billed provider cannot be pre-limited exactly. **A spec that
+names an outcome and omits the mechanism is the defect this project exists to find; do not write
+one in the fix.**
+
+## C — name the doors the freeze closes (documentation, in the module)
+
+`Finding` is frozen. **Say which door that closes and which it does not**, in the docstring:
+
+- **Closed:** assignment to `severity` and the other fields — a `str` is genuinely immutable, so the
+  construction-time validation cannot be bypassed by later assignment.
+- **NOT closed:** it is a **shallow** freeze — `f.location.line_start = 999` still mutates through,
+  because `Location` is not frozen. And `Finding` is **unhashable**, since `frozen=True` implies
+  hashability that the `Location` field cannot honour.
+
+⚠ **Do not describe the freeze as closing *the* door. Say which door.** A guarantee described as
+total but delivered partially is the same shape as everything else this project fixes.
+
+## D — `tests/arms.py`: reach the parse path
+
+**ARM-3 gains the arms that were missing.** A client returning **prose instead of JSON** must yield
+`may_report_clean() is False`. Assert the whole set and print it:
+
+| arm | client returns | required |
+|---|---|---|
+| A1 | raises | not clean |
+| A2 | **prose** (unparseable) | 🔒 **not clean** |
+| A3 | `[]` (honest empty) | **clean** — this one is CORRECT and must stay clean |
+| A4 | fenced JSON with findings | clean, findings present |
+| A5 | prose then `[]` | 🔒 **not clean** |
+
+⚠ **A3 is the control on the arm set.** A test that calls every empty result "vacuous" cannot tell
+an honest empty review from an unparseable one. **The defect is specifically `may_report_clean()`
+True *while* `error` is populated** — assert that pair, not "no findings".
+
+## THE PROOF OBLIGATION — two-sided, and it must be tight
+
+- **Forward mutant:** move `chunks_reviewed += 1` back **above** the parse step → **A2 and A5 must
+  fail.** Put it in `<mutant-dir>/`, verify the mutation is present in the copy **before** running.
+- **The bar is symmetric:** after the fix, **A2 and A5 flip to not-clean, and A1 and A3 are
+  UNCHANGED.** A fix that flips three arms is over-tightened; one that flips one is incomplete.
+  **Report which arms moved and which did not** — the unchanged ones are the evidence that you
+  fixed the property and not the test.
+- `python tests/arms.py src` → all arms PASS, exit 0; `python tests/arms.py <mutant-dir>` → non-zero.
+
+⚠ **Name the mutant you did NOT run.** If there is a second way to break this property that your
+mutant does not cover, say so rather than implying the one mutant exhausts the space.
+
+## Acceptance
+
+- `python src/review.py`, `src/findings.py`, `src/chunk.py` exit 0 and **spend nothing**
+- `python tests/arms.py src` exits **0**; `python tests/arms.py <mutant-dir>` exits **non-zero**
+- Standard library only
+
+---
+
+# Increment 7 (NEXT, not yet active): `src/prove_bites.py`
+
+**Do not build this yet.** It is being re-specified: as first written it could be satisfied by a
+reviewer that ignores its input entirely and always emits the planted rule. It now requires a
+**second, clean source** so the proof is one of *discrimination* rather than of emitting a known
+string. Full brief follows this increment.
+
+---
+
+# Increment 6 (superseded brief): `src/prove_bites.py` — a reviewer must EARN its verdict
+
+## Why this exists
+
+A review engine's **clean** result is worth something only if the engine has demonstrated it can
+**find** a known defect. Otherwise "no findings" is indistinguishable from "not looking."
+
+So: before any clean result from a reviewer is accepted, the reviewer must be shown a target with a
+**known planted flaw**, and must be shown to **report that flaw**. That is what this module decides.
+
+## Deliverable — `src/prove_bites.py`
+
+```python
+@dataclass(frozen=True)
+class BiteProof:
+    status: str                        # exactly "BITES" | "DOES_NOT_BITE" | "INCONCLUSIVE"
+    planted_rule: str                  # the rule_id that was planted in the target
+    found_rule_ids: tuple[str, ...]    # rule_ids the reviewer actually reported
+    reason: str = ""
+
+    def bites(self) -> bool: ...            # True ONLY for "BITES"
+    def may_trust_clean(self) -> bool: ...  # True ONLY for "BITES"
+
+def prove_bites(review, source: str, *, planted_rule: str, file: str = "<target>") -> BiteProof: ...
+```
+
+`review` is any callable `(source: str, file: str) -> ScanResult` — the wired review engine.
+
+## Required behaviour
+
+1. Run `review(source, file)`. Collect the `rule_id` of every finding it returns.
+2. **`"BITES"`** — at least one finding has `rule_id == planted_rule`. The reviewer found the
+   planted flaw.
+3. **`"DOES_NOT_BITE"`** — the review ran to completion, reported findings or none, and **none of
+   them was the planted rule.** The reviewer looked and did not find it.
+4. **`"INCONCLUSIVE"`** — the review could not have reached the flaw: the `ScanResult` is
+   `truncated`, or it carries an `error`, or `may_report_clean()` is False. 🔒 **These are NOT
+   failures of the reviewer and must NOT be scored as `DOES_NOT_BITE`** — the flaw may simply never
+   have been examined. Scoring that as "does not bite" blames the reviewer for our own budget stop.
+5. 🔒 **`may_trust_clean()` returns True if and only if `status == "BITES"`.** A reviewer whose
+   bite proof is `DOES_NOT_BITE` **or** `INCONCLUSIVE` has **not** earned a clean verdict, and a
+   clean result from it must be withheld. **`INCONCLUSIVE` is not a soft pass.**
+6. The three statuses are the **exact** strings above — callers compare on them.
+
+## Self-test (required)
+
+`if __name__ == "__main__":` — one `PASS`/`FAIL` per check, exit 0 only if all pass.
+**Use fake reviewers; make no real call and spend nothing.** Cover, at minimum:
+
+- a reviewer that reports the planted rule → `BITES`, and `may_trust_clean()` is True
+- a reviewer that reports findings but not the planted rule → `DOES_NOT_BITE`, `may_trust_clean()` False
+- a reviewer that reports **nothing at all** → `DOES_NOT_BITE`, `may_trust_clean()` False
+  ⚠ **This must be a real check: a reviewer that returns no findings has NOT bitten.** If your
+  comparison cannot distinguish "found nothing" from "found the flaw", say so plainly.
+- a **truncated** result → `INCONCLUSIVE`, `may_trust_clean()` False
+- a result carrying an **error** → `INCONCLUSIVE`, `may_trust_clean()` False
+
+## THE PROOF OBLIGATION
+
+`tests/arms.py` gains **`ARM-4`**, asserting against the `prove_bites.py` found at the given path:
+a reviewer that finds the planted rule yields `BITES`; one that returns nothing yields
+`DOES_NOT_BITE`; a truncated result yields `INCONCLUSIVE`; and **`may_trust_clean()` is False for
+every status except `BITES`.**
+
+Then the mutant, **one named change**:
+- make `may_trust_clean()` return `True` unconditionally → **ARM-4 must FAIL.**
+- Put it in `<mutant-dir>/`, **verify the mutation is present in the copy before running**, and run
+  `python tests/arms.py src` → all arms PASS, exit 0.
+
+Report every run verbatim with its exit code.
+
+## Acceptance
+
+- `python src/prove_bites.py` exits 0 and **spends nothing**
+- `python tests/arms.py src` exits **0**; `python tests/arms.py <mutant-dir>` exits **non-zero**
+- Standard library only. New file `src/prove_bites.py`; `tests/arms.py` extended.
+
+---
+
+# Increment 5: make the engine's guarantees real — ✅ DONE
 
 Four changes, all in the same two files. **Each one is a guarantee that is currently stated
 but not enforced**, which is the only kind of change this project exists to make.

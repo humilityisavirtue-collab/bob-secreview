@@ -38,6 +38,22 @@ class Location:
 
 @dataclass(frozen=True)
 class Finding:
+    """A single security finding produced by a review run.
+
+    frozen=True closes ONE door: assignment to `severity`, `rule_id`, and the
+    other scalar fields after construction — because `str` is genuinely immutable,
+    construction-time validation (via `__post_init__`) is the only validation
+    point and cannot be bypassed by later assignment.
+
+    Doors it does NOT close:
+    - Mutation through nested mutable objects: `f.location.line_start = 999` still
+      works, because `Location` is not frozen. This is a shallow freeze.
+    - Hashability: `frozen=True` on a dataclass normally implies `__hash__`, but our
+      custom `__eq__` (which compares only severity rank) overrides that. `Finding`
+      is intentionally unhashable — do not rely on it being usable in a set or as a
+      dict key without a wrapper.
+    """
+
     rule_id: str          # e.g. "sql-injection", "null-deref"
     severity: str         # one of SEVERITY_RANKS
     location: Location
@@ -80,6 +96,22 @@ class Finding:
 
 @dataclass
 class ScanResult:
+    """Aggregated result of a review run.
+
+    Spend reporting
+    ---------------
+    `total_cost` records the sum of all per-call costs actually incurred during
+    this run. `max_cost` records the cap that was passed to the engine.
+
+    The honest guarantee is: **no call is started that could not be afforded, and
+    the total is reported here.** We do NOT claim the cap is never exceeded in
+    absolute terms — a token-billed provider cannot be pre-limited exactly; only
+    the pre-call affordability check (`remaining >= per_call_ceiling`) and the
+    provider's own per-call limit (forwarded as `per_call_cap`) enforce the bound.
+    The mechanism is that combination; `total_cost` and `max_cost` make the outcome
+    auditable after the fact.
+    """
+
     file: str
     findings: list[Finding] = field(default_factory=list)
     model_used: str = ""
@@ -88,6 +120,8 @@ class ScanResult:
     chunks_reviewed: int = 0     # how many were actually reviewed
     chunks_failed: int = 0       # how many chunks failed (client raised or parse error)
     truncated: bool = False      # True if the review stopped before covering the whole source
+    total_cost: float = 0.0      # sum of all per-call costs incurred in this run
+    max_cost: float = 0.0        # the spend cap that was passed to the engine
 
     def as_dict(self) -> dict:
         """Return a plain dict that json.dumps() accepts without a custom encoder."""
@@ -115,6 +149,8 @@ class ScanResult:
             "chunks_reviewed": self.chunks_reviewed,
             "chunks_failed": self.chunks_failed,
             "truncated": self.truncated,
+            "total_cost": self.total_cost,
+            "max_cost": self.max_cost,
         }
 
     def may_report_clean(self) -> bool:

@@ -236,14 +236,24 @@ def review_source(
             continue
 
         total_cost += cost
-        chunks_reviewed += 1
 
         try:
             new_findings = _parse_findings(response_text, chunk, file)
         except Exception as exc:
+            # Parse failure: the response was received but we cannot extract findings from it.
+            # This counts as a failure, not as a review — a client returning prose rather than
+            # JSON must not produce a result that appears fully reviewed with zero findings.
+            # NOTE: `error` is intentionally left set here and is NOT redundant: it is the
+            # clause that keeps an unparseable run legible as incomplete. Do not remove it
+            # as "tidying" — that would silently re-open the vacuous-clean path this module
+            # exists to prevent.
+            chunks_failed += 1
             error_msg = f"chunk {chunk.index} parse error: {exc}"
             result.error = (result.error + "; " + error_msg) if result.error else error_msg
             continue
+
+        # Only count a chunk as reviewed once we actually hold its parsed output.
+        chunks_reviewed += 1
 
         for f in new_findings:
             key = (f.rule_id, f.location.line_start, f.title)
@@ -253,6 +263,8 @@ def review_source(
 
     result.chunks_reviewed = chunks_reviewed
     result.chunks_failed = chunks_failed
+    result.total_cost = total_cost
+    result.max_cost = max_cost
 
     return result
 

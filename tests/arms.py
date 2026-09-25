@@ -203,7 +203,24 @@ def arm2(chunk_path: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def arm3(review_path: str) -> bool:
-    """ARM-3 — budget-stop, cap enforcement, failing-client, and may_report_clean."""
+    """ARM-3 — budget-stop, cap enforcement, failing-client, and may_report_clean.
+
+    Sub-arms A1–A5 assert the parse-path property: `may_report_clean()` is True
+    if and only if the engine actually holds parsed output for every chunk.
+
+        A1  client raises                  -> not clean
+        A2  client returns prose           -> not clean  (KEY: parse failure ≠ review)
+        A3  client returns []              -> clean      (control: honest empty IS clean)
+        A4  client returns fenced JSON     -> clean, findings present
+        A5  client returns prose then []   -> not clean  (first chunk unparseable)
+
+    The defect being tested: `chunks_reviewed += 1` placed *before* the parse
+    step counts a chunk as reviewed even when its response is unparseable.
+    That allows `may_report_clean()` to return True while `error` is populated —
+    a vacuous clean. A2 and A5 are the arms that expose it.
+    """
+    import json as _json
+
     try:
         review_mod = _load_module("review", review_path)
     except Exception as exc:
@@ -219,8 +236,8 @@ def arm3(review_path: str) -> bool:
     # 3a. Budget-stop: truncated=True and chunks_reviewed < chunks_total
     # ------------------------------------------------------------------
     # chunk_lines=40, overlap=10, step=30
-    # 120 lines → 4 chunks; each call costs 1.0; cap=1.5, per_call_ceiling=1.0
-    # After first chunk (cost 1.0), remaining=0.5 < per_call_ceiling=1.0 → stop.
+    # 120 lines -> 4 chunks; each call costs 1.0; cap=1.5, per_call_ceiling=1.0
+    # After first chunk (cost 1.0), remaining=0.5 < per_call_ceiling=1.0 -> stop.
     source = "\n".join(f"line{i}" for i in range(1, 121))  # 120 lines
 
     costs_incurred: list[float] = []
@@ -279,7 +296,7 @@ def arm3(review_path: str) -> bool:
         return False
 
     # ------------------------------------------------------------------
-    # 3c. A client that always raises → chunks_failed==chunks_total,
+    # 3c. A client that always raises -> chunks_failed==chunks_total,
     #     chunks_reviewed==0, and may_report_clean() is False.
     # ------------------------------------------------------------------
     def always_raises(prompt: str, per_call_cap: float) -> "tuple[str, float]":
@@ -329,6 +346,101 @@ def arm3(review_path: str) -> bool:
             f"FAIL ARM-3: expected may_report_clean() to be False after all-failing client, "
             f"got {may_clean()!r}"
         )
+        return False
+
+    # ------------------------------------------------------------------
+    # A1–A5: parse-path sub-arms
+    # The single-chunk source (10 lines, chunk_lines=40) produces exactly one
+    # chunk, so each fake client is called exactly once.
+    # ------------------------------------------------------------------
+    small_source = "\n".join(f"line{i}" for i in range(1, 11))  # 10 lines -> 1 chunk
+    arm_results: dict[str, bool] = {}
+
+    # A1 — client raises -> not clean (error field set, may_report_clean False)
+    def client_a1(prompt: str, cap: float) -> "tuple[str, float]":
+        raise RuntimeError("A1 always raises")
+
+    r_a1 = review_source(small_source, client_a1, file="a1.py",
+                         max_cost=10.0, per_call_ceiling=1.0,
+                         chunk_lines=40, overlap_lines=0)
+    a1_ok = (r_a1.may_report_clean() is False) and bool(r_a1.error)
+    arm_results["A1"] = a1_ok
+    print(f"{'PASS' if a1_ok else 'FAIL'} ARM-3/A1: raises -> not clean "
+          f"(may_report_clean={r_a1.may_report_clean()}, error={r_a1.error!r})")
+
+    # A2 — client returns pure prose (unparseable) -> not clean
+    # This is the KEY arm: the defect is that chunks_reviewed is incremented
+    # even when parsing fails, making may_report_clean() return True while
+    # error is populated.
+    def client_a2(prompt: str, cap: float) -> "tuple[str, float]":
+        return "This is a security assessment. No findings were identified.", 0.01
+
+    r_a2 = review_source(small_source, client_a2, file="a2.py",
+                         max_cost=10.0, per_call_ceiling=1.0,
+                         chunk_lines=40, overlap_lines=0)
+    a2_ok = (r_a2.may_report_clean() is False) and bool(r_a2.error)
+    arm_results["A2"] = a2_ok
+    print(f"{'PASS' if a2_ok else 'FAIL'} ARM-3/A2: prose -> not clean "
+          f"(may_report_clean={r_a2.may_report_clean()}, error={r_a2.error!r})")
+
+    # A3 — client returns bare [] (honest empty review) -> clean, no findings
+    # CONTROL: an honest empty review MUST remain clean. A fix that makes every
+    # empty response "not clean" has over-tightened — it cannot distinguish an
+    # unparseable response from a genuinely clean one.
+    def client_a3(prompt: str, cap: float) -> "tuple[str, float]":
+        return "[]", 0.01
+
+    r_a3 = review_source(small_source, client_a3, file="a3.py",
+                         max_cost=10.0, per_call_ceiling=1.0,
+                         chunk_lines=40, overlap_lines=0)
+    a3_ok = (r_a3.may_report_clean() is True) and (r_a3.error is None)
+    arm_results["A3"] = a3_ok
+    print(f"{'PASS' if a3_ok else 'FAIL'} ARM-3/A3: [] -> clean (control) "
+          f"(may_report_clean={r_a3.may_report_clean()}, error={r_a3.error!r})")
+
+    # A4 — client returns fenced JSON with findings -> clean (no parse error),
+    # findings present. Tests that fenced JSON is tolerated on the way in.
+    def client_a4(prompt: str, cap: float) -> "tuple[str, float]":
+        payload = _json.dumps([{
+            "rule_id": "test-rule", "severity": "high",
+            "line": 1, "title": "Test", "detail": "", "recommendation": "",
+        }])
+        return f"```json\n{payload}\n```", 0.01
+
+    r_a4 = review_source(small_source, client_a4, file="a4.py",
+                         max_cost=10.0, per_call_ceiling=1.0,
+                         chunk_lines=40, overlap_lines=0)
+    a4_ok = (r_a4.may_report_clean() is True) and (len(r_a4.findings) > 0)
+    arm_results["A4"] = a4_ok
+    print(f"{'PASS' if a4_ok else 'FAIL'} ARM-3/A4: fenced JSON -> clean, findings present "
+          f"(may_report_clean={r_a4.may_report_clean()}, findings={len(r_a4.findings)})")
+
+    # A5 — two-chunk source; chunk 0 returns prose (parse error), chunk 1 returns []
+    # The first chunk's failure means we do NOT hold parsed output for the whole
+    # source -> may_report_clean() must be False.
+    two_chunk_source = "\n".join(f"line{i}" for i in range(1, 71))  # 70 lines, chunk=40, overlap=0 -> 2 chunks
+    call_count_a5 = [0]
+
+    def client_a5(prompt: str, cap: float) -> "tuple[str, float]":
+        call_count_a5[0] += 1
+        if call_count_a5[0] == 1:
+            # First chunk: return prose (unparseable)
+            return "No security issues found in this code.", 0.01
+        else:
+            # Second chunk: return honest empty JSON
+            return "[]", 0.01
+
+    r_a5 = review_source(two_chunk_source, client_a5, file="a5.py",
+                         max_cost=10.0, per_call_ceiling=1.0,
+                         chunk_lines=40, overlap_lines=0)
+    a5_ok = (r_a5.may_report_clean() is False) and bool(r_a5.error)
+    arm_results["A5"] = a5_ok
+    print(f"{'PASS' if a5_ok else 'FAIL'} ARM-3/A5: prose then [] -> not clean "
+          f"(may_report_clean={r_a5.may_report_clean()}, error={r_a5.error!r})")
+
+    if not all(arm_results.values()):
+        failed = [k for k, v in arm_results.items() if not v]
+        print(f"FAIL ARM-3: sub-arms failed: {', '.join(failed)}")
         return False
 
     print("PASS ARM-3")
