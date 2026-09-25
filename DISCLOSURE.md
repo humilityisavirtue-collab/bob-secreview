@@ -49,6 +49,45 @@ graded target's own repository** — not by path, not by import, and not by `dif
 
 `src/**` — all core project logic. `bob_sessions/**` — Bob IDE task-session exports.
 
+### Which parts were Bob task sessions, and which were in-window hand work
+
+**The split is stated plainly rather than summarised, because it is checkable against the
+export and a flat claim would be false.** Every Bob session is a row in Bob's own task
+store, and its transcript is in `bob_sessions/`.
+
+**Bob task sessions.** Increments 1–7 of the build were carried out as Bob sessions —
+`findings.py`, `chunk.py`, the paired defect fixes, `review.py`, the coverage hardening,
+the parse-path fix, and `prove_bites.py`. Each is a distinct task with its own transcript,
+and all of them are **inside the exported record**.
+
+**Bob was also the author of the problem analysis.** The two known weaknesses that this
+project treats as its own targets were **found by Bob reviewing our specification**, not by
+us — see `docs/armA.out.txt` and `docs/armC.out.txt`, both Bob sessions from this window.
+
+**In-window hand work.** A number of later changes were written directly, in the hackathon
+window, without a Bob session:
+
+| Change | Why it is hand work |
+|---|---|
+| the margin/baseline repair in `prove_bites.py` | the corresponding Bob runs terminated on the cost cap before producing it |
+| the `report.py` entry-point dispatch fix | found after its session ended |
+| the `bob_client` model-id guard | found by running the client, not by a session |
+| `ARM-6`, the subprocess entry-point arm | added with the dispatch fix |
+| the twin and the catchability proof | `demo/`-independent, and deliberately **outside this repository** |
+| canonical `rule_id` comparison (`_canon_rule_id`) | written in-window; the hazard it closes was **named by Bob** in the session cited above |
+
+**Why this does not affect eligibility.** The Official Rules constrain *when* code was
+written — it must not have existed in substantive form before the Contest — not *which tool
+typed it*. In-window hand work satisfies that on the same footing as a session, and Bob
+remains the core component of the submission either way.
+
+**⚠ One honest gap, and it is being closed, not hidden.** Increments 8–11 appear in Bob's
+task store but are **not yet in the exported record**, because the workspace path's case
+changed mid-build and the exporter matches it case-sensitively, forking the project into two
+buckets. The export currently covers the first bucket only. Both buckets are being exported
+and both belong in `bob_sessions/`. **Anyone auditing this should expect two exports, and
+should treat the larger one as authoritative.**
+
 ## The two submission requirements, and which half we have
 
 The entry requirements ask for **both** an **exported IBM Bob report** of all relevant
