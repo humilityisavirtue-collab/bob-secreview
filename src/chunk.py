@@ -36,16 +36,13 @@ def chunk_text(source: str, chunk_lines: int = 300, overlap_lines: int = 30) -> 
 
     while start < total:
         end = min(start + chunk_lines, total)  # exclusive, 0-based
-        # Reconstruct the text for these lines (preserve original line endings
-        # by using splitlines(True) so we don't lose trailing newlines per line,
-        # but the spec pins counting to str.splitlines(), so we use that for
-        # the invariant; we rebuild from the plain splitlines() for simplicity).
+        # Reconstruct the text for these lines.  Line counting is pinned to
+        # str.splitlines(), and the invariant this module guarantees is that
+        # text.splitlines() reconstructs exactly the source lines for the
+        # declared span (start_line..end_line).  A bare "\n".join(slice) does
+        # not satisfy that for every slice, so the terminal newline below is
+        # load-bearing rather than cosmetic -- keep it.
         chunk_lines_list = all_lines[start:end]
-        # Join with "\n" and append a terminal "\n" so that empty lines at the
-        # end of the slice round-trip correctly through str.splitlines():
-        #   "\n".join([..., ""]) ends with "\n", and splitlines() drops that
-        #   trailing newline, losing the empty line.  Adding one extra "\n"
-        #   ensures splitlines() reconstructs the slice exactly.
         text = "\n".join(chunk_lines_list) + "\n"
         start_line = start + 1        # convert to 1-based
         end_line = end                # end is already the 1-based last line (end-1+1)
