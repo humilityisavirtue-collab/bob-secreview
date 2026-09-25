@@ -358,18 +358,23 @@ def chat(
             f"has actually answered YES, or pass require_evidence=False to accept the loss."
         )
 
+    if transport == "shell":
+        # The model id is NOT required here, and demanding it up front blocked the
+        # default transport entirely: `bob run` selects the model itself, so the
+        # shell path never reads it. The id is needed only by the HTTP path, which
+        # must name a model. A guard placed before the branch required something
+        # half its callers do not use -- the check has to sit where it discriminates.
+        return _chat_shell(flatten_messages(messages), workspace=workspace,
+                           max_cost=max_cost,
+                           max_turns=max_turns if max_turns is not None else DEFAULT_MAX_TURNS,
+                           mode=mode)
+
     model = model or MODEL_ID
     if not model:
         raise BobNotConfigured(
             "no model id: set BOB_MODEL_ID, or call discover_model_id() first "
             "(the id is UNKNOWN -- V1 discovers it, it is not guessable)"
         )
-
-    if transport == "shell":
-        return _chat_shell(flatten_messages(messages), workspace=workspace,
-                           max_cost=max_cost,
-                           max_turns=max_turns if max_turns is not None else DEFAULT_MAX_TURNS,
-                           mode=mode)
     return _chat_http(messages, model, max_tokens=max_tokens,
                       temperature=temperature, max_turns=max_turns)
 
