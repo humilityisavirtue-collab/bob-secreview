@@ -1,0 +1,12 @@
+# Line endings are load-bearing in this repo, which is unusual and worth stating.
+
+# 1. prove_bites compares the subject against a clean twin BY CONTENT. The twin is
+#    supplied by the caller and is not stored here. If a checkout converts line
+#    endings, the target and the twin differ across the whole file and the hunk
+#    count becomes meaningless -- the pair stops being a control.
+# 2. tests/arms.py compares a mutated subject against src/ by content. A checkout
+#    that rewrites line endings on one side and not the other turns a clean tree
+#    into a false "undeclared difference" and the harness refuses.
+
+# Pin LF everywhere so the bytes on disk are the bytes in the blob.
+* text=auto eol=lf
