@@ -43,6 +43,14 @@ sha256sum src/chunk.py                            # must match
 # 3. Is the repo public?  A logged-in session sees what a judge cannot.
 curl -sS -o /dev/null -w '%{http_code}\n' \
      https://github.com/humilityisavirtue-collab/bob-secreview     # must be 200
+
+# 4. Is everything in src/ actually TRACKED and on the remote?
+#    A file can sit in the working tree, run, and pass every test while never
+#    having been added -- present to us, absent from the submission.
+git fetch -q origin master
+for f in src/*.py; do
+  git ls-tree --name-only origin/master "$f" | grep -q . || echo "*** NOT ON REMOTE: $f"
+done
 ```
 
 ⚠ **`raw.githubusercontent.com` is eventually consistent and serves the PREVIOUS revision

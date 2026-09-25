@@ -35,7 +35,7 @@ import sys
 # ---------------------------------------------------------------------------
 
 # The set of module files the harness knows about.
-_MODULE_FILES = ("findings.py", "chunk.py", "review.py", "prove_bites.py")
+_MODULE_FILES = ("findings.py", "chunk.py", "review.py", "prove_bites.py", "report.py")
 
 
 def _sha256(path: str) -> str:
@@ -138,14 +138,15 @@ def _load_module(name: str, path: str):
     return mod
 
 
-def _resolve(arg: str) -> tuple[str, str, str, str]:
-    """Return (findings_path, chunk_path, review_path, prove_bites_path) from a file-or-directory argument."""
+def _resolve(arg: str) -> tuple[str, str, str, str, str]:
+    """Return (findings_path, chunk_path, review_path, prove_bites_path, report_path) from a file-or-directory argument."""
     arg = os.path.abspath(arg)
     if os.path.isdir(arg):
         findings_path    = os.path.join(arg, "findings.py")
         chunk_path       = os.path.join(arg, "chunk.py")
         review_path      = os.path.join(arg, "review.py")
         prove_bites_path = os.path.join(arg, "prove_bites.py")
+        report_path      = os.path.join(arg, "report.py")
     else:
         # A single file was given — derive siblings from the same directory.
         base = os.path.dirname(arg)
@@ -155,26 +156,37 @@ def _resolve(arg: str) -> tuple[str, str, str, str]:
             chunk_path       = os.path.join(base, "chunk.py")
             review_path      = os.path.join(base, "review.py")
             prove_bites_path = os.path.join(base, "prove_bites.py")
+            report_path      = os.path.join(base, "report.py")
         elif name == "chunk.py":
             chunk_path       = arg
             findings_path    = os.path.join(base, "findings.py")
             review_path      = os.path.join(base, "review.py")
             prove_bites_path = os.path.join(base, "prove_bites.py")
+            report_path      = os.path.join(base, "report.py")
         elif name == "review.py":
             review_path      = arg
             findings_path    = os.path.join(base, "findings.py")
             chunk_path       = os.path.join(base, "chunk.py")
             prove_bites_path = os.path.join(base, "prove_bites.py")
+            report_path      = os.path.join(base, "report.py")
         elif name.startswith("prove_bites"):
             prove_bites_path = arg
             findings_path    = os.path.join(base, "findings.py")
             chunk_path       = os.path.join(base, "chunk.py")
             review_path      = os.path.join(base, "review.py")
+            report_path      = os.path.join(base, "report.py")
+        elif name == "report.py":
+            report_path      = arg
+            findings_path    = os.path.join(base, "findings.py")
+            chunk_path       = os.path.join(base, "chunk.py")
+            review_path      = os.path.join(base, "review.py")
+            prove_bites_path = os.path.join(base, "prove_bites.py")
         else:
             raise ValueError(
-                f"Unrecognised file {arg!r}; expected findings.py, chunk.py, review.py, or prove_bites.py"
+                f"Unrecognised file {arg!r}; expected findings.py, chunk.py, review.py, "
+                f"prove_bites.py, or report.py"
             )
-    return findings_path, chunk_path, review_path, prove_bites_path
+    return findings_path, chunk_path, review_path, prove_bites_path, report_path
 
 
 # ---------------------------------------------------------------------------
@@ -991,6 +1003,254 @@ def arm4(prove_bites_path: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# ARM-5: report.py -- caps are required; verdict word is literal; ratios print
+# ---------------------------------------------------------------------------
+
+def arm5(report_path: str) -> bool:
+    """ARM-5 -- report.py enforces required caps and emits correct verdict words.
+
+    Drives main() in-process with a fake client.  No real calls, no key, no spend.
+
+    Assertions:
+      5a. Missing --max-cost     -> non-zero exit, no client call made.
+      5b. Missing --per-call-ceiling -> non-zero exit, no client call made.
+      5c. Fake BITES review      -> verdict word is the literal string "BITES",
+                                    twin_ratio and twin_ratio_baseline both print.
+      5d. No --twin              -> verdict word is the literal "INCONCLUSIVE".
+    """
+    import importlib.util as _ilu
+    import io
+    import json as _json
+    import tempfile as _tmp
+    import os as _os
+
+    # Load the report module from the given path.
+    spec = importlib.util.spec_from_file_location("report_arm5", report_path)
+    if spec is None or spec.loader is None:
+        print(f"FAIL ARM-5: cannot load report from {report_path!r}")
+        return False
+    try:
+        report_mod = importlib.util.module_from_spec(spec)
+        # Ensure the module can find its siblings via __file__.
+        spec.loader.exec_module(report_mod)  # type: ignore[union-attr]
+    except Exception as exc:
+        print(f"FAIL ARM-5: error loading report from {report_path!r}: {exc}")
+        return False
+
+    main_fn = getattr(report_mod, "main", None)
+    if main_fn is None:
+        print("FAIL ARM-5: report module has no main() function")
+        return False
+
+    # A fake client that records calls.
+    class _CallTracker:
+        def __init__(self, responses):
+            self.calls = []
+            self._responses = iter(responses)
+
+        def __call__(self, prompt: str, cap: float):
+            self.calls.append((prompt, cap))
+            return next(self._responses)
+
+    # A realistic source written to a temp file.
+    LARGE_SOURCE = "\n".join([
+        "import os",
+        "import sys",
+        "def foo(x):",
+        "    y = evil(x)",
+        "    z = x + 1",
+        "    return y + z",
+        "def bar(a, b):",
+        "    return a * b",
+        "class Baz:",
+        "    def __init__(self):",
+        "        self.value = 0",
+        "    def compute(self, n):",
+        "        return self.value + n",
+        "def main():",
+        "    obj = Baz()",
+        "    result = foo(obj.compute(10))",
+        "    bar(result, 2)",
+        "    print(result)",
+        "if __name__ == '__main__':",
+        "    main()",
+    ]) + "\n"
+    LARGE_TWIN = LARGE_SOURCE.replace("    y = evil(x)", "    y = safe(x)")
+
+    tmp_target = _tmp.NamedTemporaryFile(mode="w", suffix=".py",
+                                         delete=False, encoding="utf-8")
+    tmp_target.write(LARGE_SOURCE)
+    tmp_target.close()
+
+    tmp_twin = _tmp.NamedTemporaryFile(mode="w", suffix=".py",
+                                       delete=False, encoding="utf-8")
+    tmp_twin.write(LARGE_TWIN)
+    tmp_twin.close()
+
+    ok = True
+
+    def _fail(msg: str) -> None:
+        nonlocal ok
+        ok = False
+        print(f"FAIL ARM-5: {msg}")
+
+    try:
+        old_stderr = sys.stderr
+        old_stdout = sys.stdout
+
+        # ------------------------------------------------------------------
+        # 5a. Missing --max-cost -> non-zero exit, no client call
+        # ------------------------------------------------------------------
+        tracker_5a = _CallTracker([])
+        sys.stderr = io.StringIO()
+        sys.stdout = io.StringIO()
+        rc_5a = main_fn(
+            ["--target", tmp_target.name, "--per-call-ceiling", "1",
+             "--planted", "planted-rule"],
+            _client=tracker_5a,
+        )
+        err_5a = sys.stderr.getvalue()
+        sys.stderr = old_stderr
+        sys.stdout = old_stdout
+        if rc_5a == 0:
+            _fail(f"5a: missing --max-cost should be non-zero exit, got {rc_5a}")
+        if tracker_5a.calls:
+            _fail(f"5a: client was called {len(tracker_5a.calls)} time(s) despite missing cap")
+        if "--max-cost" not in err_5a:
+            _fail(f"5a: stderr does not name --max-cost: {err_5a!r}")
+        if ok:
+            print(f"  ARM-5/5a: missing --max-cost -> exit {rc_5a}, no calls, stderr names flag  PASS")
+
+        # ------------------------------------------------------------------
+        # 5b. Missing --per-call-ceiling -> non-zero exit, no client call
+        # ------------------------------------------------------------------
+        tracker_5b = _CallTracker([])
+        sys.stderr = io.StringIO()
+        sys.stdout = io.StringIO()
+        rc_5b = main_fn(
+            ["--target", tmp_target.name, "--max-cost", "2",
+             "--planted", "planted-rule"],
+            _client=tracker_5b,
+        )
+        err_5b = sys.stderr.getvalue()
+        sys.stderr = old_stderr
+        sys.stdout = old_stdout
+        if rc_5b == 0:
+            _fail(f"5b: missing --per-call-ceiling should be non-zero exit, got {rc_5b}")
+        if tracker_5b.calls:
+            _fail(f"5b: client was called {len(tracker_5b.calls)} time(s) despite missing cap")
+        if "--per-call-ceiling" not in err_5b:
+            _fail(f"5b: stderr does not name --per-call-ceiling: {err_5b!r}")
+        if ok:
+            print(f"  ARM-5/5b: missing --per-call-ceiling -> exit {rc_5b}, no calls  PASS")
+
+        # ------------------------------------------------------------------
+        # 5c. Fake BITES review -> literal "BITES" in output, both ratios print
+        # ------------------------------------------------------------------
+        def _bites_response(prompt, cap):
+            if "evil" in prompt:
+                return _json.dumps([{
+                    "rule_id": "planted-rule", "severity": "high",
+                    "line": 4, "title": "Evil call", "detail": "", "recommendation": "",
+                }]), 0.1
+            return "[]", 0.1
+
+        tracker_5c = _CallTracker(
+            [_bites_response(p, 1) for p in ["evil prompt", "safe prompt"]]
+        )
+        # Use a proper iterator-based client that uses the real function
+        def _real_bites_client(prompt: str, cap: float) -> tuple:
+            return _bites_response(prompt, cap)
+
+        sys.stdout = io.StringIO()
+        sys.stderr = io.StringIO()
+        rc_5c = main_fn(
+            ["--target", tmp_target.name, "--twin", tmp_twin.name,
+             "--planted", "planted-rule",
+             "--max-cost", "2", "--per-call-ceiling", "1"],
+            _client=_real_bites_client,
+        )
+        out_5c = sys.stdout.getvalue()
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+        if rc_5c != 0:
+            _fail(f"5c: expected exit 0, got {rc_5c}")
+        if "BITES" not in out_5c:
+            _fail(f"5c: literal 'BITES' not found in output")
+        if "twin_ratio" not in out_5c:
+            _fail(f"5c: 'twin_ratio' not printed")
+        if "twin_ratio_baseline" not in out_5c:
+            _fail(f"5c: 'twin_ratio_baseline' not printed")
+        if ok:
+            print(f"  ARM-5/5c: BITES verdict present, both ratios printed  PASS")
+
+        # ------------------------------------------------------------------
+        # 5d. No --twin -> literal "INCONCLUSIVE" in output
+        # ------------------------------------------------------------------
+        sys.stdout = io.StringIO()
+        sys.stderr = io.StringIO()
+        rc_5d = main_fn(
+            ["--target", tmp_target.name,
+             "--planted", "planted-rule",
+             "--max-cost", "2", "--per-call-ceiling", "1"],
+            _client=_real_bites_client,
+        )
+        out_5d = sys.stdout.getvalue()
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+        if rc_5d != 0:
+            _fail(f"5d: expected exit 0, got {rc_5d}")
+        if "INCONCLUSIVE" not in out_5d:
+            _fail(f"5d: literal 'INCONCLUSIVE' not found in output")
+        if ok:
+            print(f"  ARM-5/5d: INCONCLUSIVE verdict present  PASS")
+
+    finally:
+        sys.stderr = old_stderr
+        sys.stdout = old_stdout
+        _os.unlink(tmp_target.name)
+        _os.unlink(tmp_twin.name)
+
+    if ok:
+        print("PASS ARM-5")
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# ARM-6: the CLI ENTRYPOINT, invoked as a real process
+# ---------------------------------------------------------------------------
+# ARM-5 drives main() in-process. That cannot see whether __main__ routes to main()
+# AT ALL -- and it did not: __main__ WAS the self-test, so every argument list
+# silently ran the self-test and exited 0, including an unknown flag. A green arm
+# over an unreachable CLI. An arm whose subject is the function is blind to the
+# entrypoint; this one runs the file the way a user does.
+
+def arm6(report_path: str) -> bool:
+    """ARM-6 — the entrypoint refuses a missing/unknown argument, as a subprocess."""
+    import subprocess
+
+    ok = True
+    cases = [
+        ("no caps",          ["--target", report_path]),
+        ("no per-call-ceil", ["--target", report_path, "--max-cost", "2"]),
+        ("unknown flag",     ["--bogus-flag"]),
+    ]
+    for label, args in cases:
+        p = subprocess.run([sys.executable, report_path] + args,
+                           capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        if p.returncode == 0:
+            print(f"FAIL ARM-6 [{label}]: exit 0 - the entrypoint did not refuse")
+            ok = False
+        elif "SELFTEST GREEN" in (p.stdout or ""):
+            print(f"FAIL ARM-6 [{label}]: ran the SELF-TEST instead of refusing")
+            ok = False
+    if ok:
+        print("PASS ARM-6")
+    return ok
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1000,7 +1260,7 @@ if __name__ == "__main__":
         sys.exit(2)
 
     try:
-        findings_path, chunk_path, review_path, prove_bites_path = _resolve(sys.argv[1])
+        findings_path, chunk_path, review_path, prove_bites_path, report_path = _resolve(sys.argv[1])
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(2)
@@ -1018,6 +1278,8 @@ if __name__ == "__main__":
         arm2(chunk_path),
         arm3(review_path),
         arm4(prove_bites_path),
+        arm5(report_path),
+        arm6(report_path),
     ]
 
     sys.exit(0 if all(results) else 1)

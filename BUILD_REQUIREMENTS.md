@@ -7,11 +7,109 @@ honest record of **what was asked for**, increment by increment, in order.
 context: they describe interfaces that already exist under `src/`, and later modules should
 conform to those rather than invent their own.
 
-Increment 10b is currently ACTIVE.
+Increment 11 is currently ACTIVE.
 
 ---
 
-# ⬅ ACTIVE — Increment 10b: the baseline's rearrangement must not be able to be the identity
+# ⬅ ACTIVE — Increment 11: `src/report.py` — the front door
+
+## Why
+
+Every `src/*.py` `__main__` today is a self-test with a **fake** client. **There is no command that
+runs a real review and prints a verdict.** The demo needs one. This is that command.
+
+`src/bob_client.py` is now in the repo — the transport, built in-window, selftest green. **`report.py`
+wires it to `review` and `prove_bites`.**
+
+## Deliverable — `src/report.py`
+
+Two invocations must work, run from the repo root:
+
+```
+python -m src.report --target <file> --twin <path-outside-repo> --planted <rule_id> \
+       --max-cost 2 --per-call-ceiling 1
+python -m src.report --target <file> --max-cost 2 --per-call-ceiling 1
+```
+
+⚠ **`python src/report.py …` must also work.** The other modules load siblings by path; `-m` changes
+`__package__`. Both forms, or the camera points at a command that does not run.
+
+| flag | required | meaning |
+|---|---|---|
+| `--target PATH` | ✅ | the file to review — read from disk |
+| `--twin PATH` | optional | the clean twin, **read from a path the caller supplies, outside this repo** |
+| `--planted RULE_ID` | optional | the rule planted in the target |
+| `--max-cost N` | 🔒 ✅ | total spend cap, **no default** |
+| `--per-call-ceiling N` | 🔒 ✅ | max cost of any single call, **no default** |
+| `--max-turns N` | optional | passed through to the provider |
+| `--workspace DIR` | optional | the workspace the provider session runs in |
+
+🔒 **THE CAPS ARE REQUIRED AND HAVE NO DEFAULT.** Omitting either → a **usage error naming the
+missing flag**, exit non-zero, **and no call is made**. Every chunk is a paid call; a reviewer that
+silently spends is worse than one that refuses to start.
+
+## The bridge to the client — and it is load-bearing
+
+The review client protocol is `(prompt: str, per_call_cap: float) -> (text: str, cost: float)`.
+`bob_client.chat(...)` returns **text only**, and its cost lands in `bob_client.LAST_STATS`.
+
+Write a small adapter that:
+- calls `bob_client.chat([{"role":"user","content":prompt}], max_cost=per_call_cap, …)`
+- returns `(text, LAST_STATS.get("session_costs", 0.0))`
+
+🔒 **Pass `per_call_cap` to the provider.** That is what makes the cap real — the provider enforces
+it. **A client-side check with no provider limit promises nothing.**
+⚠ **Import `bob_client` LAZILY**, inside the function that builds the client — so the self-test and
+any `--help` path never require a key.
+
+## The output — written for a 3-minute video, and these are requirements
+
+1. **One screen, no scrolling.**
+2. 🔒 **The verdict appears as a LITERAL WORD: `BITES`, `DOES_NOT_BITE` or `INCONCLUSIVE`.** Not a
+   colour, not a symbol, not a paraphrase. Judges read words.
+3. 🔒 **`twin_ratio` AND `twin_ratio_baseline` both print**, with the margin between them.
+4. **The withheld case must be reachable on camera** — running with no `--twin`, or with a
+   degenerate one, prints `INCONCLUSIVE` and says why. That is a feature, not an error path.
+5. Print the findings the review returned: `rule_id`, `severity`, `file:line`, title.
+6. Print the coverage fields (`chunks_reviewed` / `chunks_failed` / `chunks_total`, `truncated`,
+   `may_report_clean()`, `total_cost`) — **a partial review must not read as a complete one.**
+7. **Diagnostics to stderr; the report to stdout.**
+
+## Self-test (required)
+
+`if __name__ == "__main__":`, **a fake client, no real call, no key, no spend.** Cover:
+
+- omitting `--max-cost` → usage error naming the flag, non-zero exit
+- omitting `--per-call-ceiling` → same
+- a fake review that finds the planted rule on the target and not on the twin → the output
+  **contains the literal `BITES`**, and prints both ratios
+- **no `--twin`** → the output contains the literal `INCONCLUSIVE`
+- a truncated/failed review → the output does **not** read as clean
+- the adapter passes the per-call cap through (assert it reaches the client)
+
+## THE PROOF OBLIGATION
+
+`tests/arms.py` gains **`ARM-5`**, asserted against the `report.py` at the given path, driving
+`main()` in-process with a fake client. It asserts: a missing cap is refused with **no call made**;
+the verdict word is literal; both ratios print. Then:
+
+- **a mutant that gives the caps a default** (so the command runs without them) → **ARM-5 must
+  FAIL.** Declare it in that directory's `MUTANT.json`, and verify the mutation is present before
+  running.
+
+Report every run with its exit code, and **paste the CLI's actual output for one real invocation
+shape** — the fake-client one, so it costs nothing.
+
+## Acceptance
+
+- `python src/report.py --help` exits 0 and **spends nothing**
+- `python -m src.report` and `python src/report.py` both resolve
+- `python tests/arms.py src` → all arms PASS, exit 0; the defaulting mutant → non-zero
+- Standard library only
+
+---
+
+# Increment 10b: the baseline's rearrangement must not be able to be the identity — ✅ DONE
 
 ## The defect, measured
 
@@ -234,7 +332,7 @@ away. Give the twin its own label (`f"{file}.twin"` is fine).
 
 ---
 
-# Increment 11 (NEXT, not yet active): `src/mcp_server.py`
+# Increment 12 (deferred): `src/mcp_server.py`
 
 The brief below is written and ready; **it is not the current task.** Full text retained.
 
