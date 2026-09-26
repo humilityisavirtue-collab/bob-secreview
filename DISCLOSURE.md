@@ -131,12 +131,23 @@ The entry requirements ask for **both** an **exported IBM Bob report** of all re
 tasks/sessions **and** **screenshots**. They are two requirements, not one.
 
 - **Export — ✅ present:** `bob_sessions/`, below. Produced by Bob IDE's own Export Task History.
-- **Screenshots — ✅ present:** `bob_sessions/captures/` — **16 PNGs**, one per task, each a
-  capture of the IDE's own "task session consumption summary" panel. Of the sessions in this
-  workspace, 20 produced a consumption summary; **4 were transport smoke tests** with no work
-  in them and are excluded. Each frame was paired to its task by reading the panel's own
-  `Task Id` and `Workspace` fields — **not by capture order** — and `captures_manifest.csv`
-  records the task id, workspace, coins and sha256 of every frame.
+- **Screenshots — ✅ present:** `bob_sessions/captures/` — **20 PNGs, one for every task in
+  the export.** The export above holds 20 sessions and this set holds one screenshot of each,
+  so the two can be checked against each other **by counting**, rather than by taking this
+  paragraph's word for it.
+
+  Four of the twenty are transport smoke tests — single-word prompts used to confirm the
+  client was wired up. They are included because the requirement is a screenshot of *each
+  relevant task*, and leaving them out would make the capture set silently smaller than the
+  export sitting beside it. One of them, `Reply with exactly: TRACE-OK`, renders **no
+  Bobcoins row at all**, because the task never accrued a cost.
+
+  Each frame is paired to its task by reading the panel's own `Task Id` and `Workspace`
+  fields — **not by capture order** — and `captures_manifest.csv` records the task id,
+  workspace, coins and sha256 of every frame. Filenames follow the guide's convention,
+  `<team>_task<NN>_<short description>_summary.png`, where **`NN` is the task's chronological
+  position in Bob's own store**, so the numbering is re-derivable from the store rather than
+  assigned by hand.
 
 ## The Bob task-session exports (`bob_sessions/`)
 
