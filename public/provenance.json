@@ -1,0 +1,211 @@
+{
+ "generated_by": "tools/build_provenance.py",
+ "note": "Summary of IBM Bob task sessions recorded during the hackathon window, reduced from the exports in bob_sessions/. Recorded sessions, not a live call: the deployed harness makes no model call by design.",
+ "sources": [
+  {
+   "file": "bob-tasks-secreview-bob-2026-09-25.json",
+   "workspace": "file:c:\\secreview-bob",
+   "exported_at": "2026-09-25T21:50:39+00:00",
+   "tasks": 8,
+   "messages": 346
+  },
+  {
+   "file": "bob-tasks-secreview-bob-CAPITAL-C_rendered.json",
+   "workspace": "file:C:\\secreview-bob",
+   "exported_at": "2026-09-25T23:59:29+00:00",
+   "tasks": 12,
+   "messages": 460
+  }
+ ],
+ "totals": {
+  "exports": 2,
+  "sessions": 20,
+  "messages": 806,
+  "cost": 40.1123,
+  "tokens": 1089992,
+  "first": "2026-09-25T20:46:45+00:00",
+  "last": "2026-09-25T23:34:55+00:00"
+ },
+ "sessions": [
+  {
+   "id": "eb6b50d0ec27",
+   "title": "Implement the requirements in BUILD_REQUIREMENTS.md in this workspace. Write the file at the exa…",
+   "status": "active",
+   "cost": 0.1595,
+   "tokens": 14380,
+   "messages": 13,
+   "created_at": "2026-09-25T20:46:45+00:00"
+  },
+  {
+   "id": "c8d94f3a0f30",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: create src/ch…",
+   "status": "active",
+   "cost": 0.4928,
+   "tokens": 24680,
+   "messages": 27,
+   "created_at": "2026-09-25T20:52:00+00:00"
+  },
+  {
+   "id": "04b1a187b1ec",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only. Both fixes, t…",
+   "status": "error",
+   "cost": 1.104,
+   "tokens": 32995,
+   "messages": 44,
+   "created_at": "2026-09-25T21:01:23+00:00"
+  },
+  {
+   "id": "b203ea311377",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: src/review.py…",
+   "status": "active",
+   "cost": 2.2445,
+   "tokens": 45918,
+   "messages": 64,
+   "created_at": "2026-09-25T21:07:37+00:00"
+  },
+  {
+   "id": "35bdb65ed4d6",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: parts A to E,…",
+   "status": "active",
+   "cost": 2.8404,
+   "tokens": 58320,
+   "messages": 62,
+   "created_at": "2026-09-25T21:12:59+00:00"
+  },
+  {
+   "id": "9ba191ab0dcc",
+   "title": "hello?",
+   "status": "active",
+   "cost": 0.0102,
+   "tokens": 5120,
+   "messages": 3,
+   "created_at": "2026-09-25T21:29:47+00:00"
+  },
+  {
+   "id": "f7ecb1aaa148",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: parts A to D,…",
+   "status": "active",
+   "cost": 2.8687,
+   "tokens": 63688,
+   "messages": 61,
+   "created_at": "2026-09-25T21:30:03+00:00"
+  },
+  {
+   "id": "b470f3fdbf6c",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: src/prove_bit…",
+   "status": "active",
+   "cost": 3.4949,
+   "tokens": 65213,
+   "messages": 72,
+   "created_at": "2026-09-25T21:35:49+00:00"
+  },
+  {
+   "id": "05abfc3060bb",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: parts A and B…",
+   "status": "active",
+   "cost": 2.5909,
+   "tokens": 59594,
+   "messages": 55,
+   "created_at": "2026-09-25T21:56:10+00:00"
+  },
+  {
+   "id": "0482d84e141a",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: parts A to E.…",
+   "status": "active",
+   "cost": 4.1092,
+   "tokens": 78787,
+   "messages": 66,
+   "created_at": "2026-09-25T22:10:59+00:00"
+  },
+  {
+   "id": "281a371ee8b6",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: replace the f…",
+   "status": "error",
+   "cost": 4.0728,
+   "tokens": 98413,
+   "messages": 56,
+   "created_at": "2026-09-25T22:31:08+00:00"
+  },
+  {
+   "id": "4b3938a9b4a6",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: replace the r…",
+   "status": "error",
+   "cost": 4.0103,
+   "tokens": 94631,
+   "messages": 64,
+   "created_at": "2026-09-25T22:54:47+00:00"
+  },
+  {
+   "id": "22b0e21736f5",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: src/report.py…",
+   "status": "error",
+   "cost": 4.067,
+   "tokens": 102870,
+   "messages": 59,
+   "created_at": "2026-09-25T23:14:29+00:00"
+  },
+  {
+   "id": "dde830b7c8a6",
+   "title": "reply with the single word OK",
+   "status": "active",
+   "cost": 0.0207,
+   "tokens": 10351,
+   "messages": 3,
+   "created_at": "2026-09-25T23:32:14+00:00"
+  },
+  {
+   "id": "d1e96346ce07",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: replace the r…",
+   "status": "error",
+   "cost": 1.5526,
+   "tokens": 78426,
+   "messages": 37,
+   "created_at": "2026-09-25T23:34:00+00:00"
+  },
+  {
+   "id": "47972f23aa4f",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: replace the f…",
+   "status": "error",
+   "cost": 2.433,
+   "tokens": 76261,
+   "messages": 43,
+   "created_at": "2026-09-25T23:34:00+00:00"
+  },
+  {
+   "id": "1ae7ef28ac84",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: src/report.py…",
+   "status": "error",
+   "cost": 2.6347,
+   "tokens": 95086,
+   "messages": 42,
+   "created_at": "2026-09-25T23:34:00+00:00"
+  },
+  {
+   "id": "5fe526cb6849",
+   "title": "Read BUILD_REQUIREMENTS.md in this workspace. Implement the ACTIVE increment only: parts A and B…",
+   "status": "error",
+   "cost": 1.3854,
+   "tokens": 74897,
+   "messages": 30,
+   "created_at": "2026-09-25T23:34:00+00:00"
+  },
+  {
+   "id": "cbc830df9da3",
+   "title": "Reply with exactly: BOB-PROBE-OK",
+   "status": "active",
+   "cost": 0.0207,
+   "tokens": 10362,
+   "messages": 3,
+   "created_at": "2026-09-25T23:34:21+00:00"
+  },
+  {
+   "id": "cd07f2ad5ffb",
+   "title": "Reply with exactly: TRACE-OK",
+   "status": "error",
+   "cost": 0.0,
+   "tokens": 0,
+   "messages": 2,
+   "created_at": "2026-09-25T23:34:55+00:00"
+  }
+ ]
+}

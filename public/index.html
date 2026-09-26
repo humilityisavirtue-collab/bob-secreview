@@ -39,6 +39,18 @@
   .meta{color:var(--dim);font-size:.82rem;margin-top:.7rem}
   .meta b{color:var(--ink);font-weight:600}
   .err{color:var(--nobite)}
+  .prow{display:grid;grid-template-columns:1fr 62px 74px;gap:14px;align-items:baseline;
+        padding:10px 16px;border-top:1px solid var(--line);background:var(--panel)}
+  .prow:first-child{border-top:0}
+  .ptask{font-size:.86rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pnum{text-align:right;font-size:.8rem;color:var(--dim);
+        font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .pstat{font-size:.72rem;letter-spacing:.03em;text-align:right;font-weight:600}
+  .s-active{color:var(--bite)} .s-error{color:var(--nobite)} .s-unknown{color:var(--incon)}
+  .tot{display:flex;flex-wrap:wrap;gap:6px 26px;margin:0 0 .9rem}
+  .tot div{font-size:.82rem;color:var(--dim)}
+  .tot b{display:block;color:var(--ink);font-size:1.18rem;font-weight:650;
+         letter-spacing:-.01em;font-variant-numeric:tabular-nums}
   footer{margin-top:3rem;padding-top:1.4rem;border-top:1px solid var(--line);
          color:var(--dim);font-size:.88rem}
   a{color:var(--accent)}
@@ -81,9 +93,30 @@
   the caller, by path. Two files in one tree means comparing them <em>is</em> the answer — and
   you can verify that claim by looking at the repository, where the twin is absent.</p>
 
+  <h2>Where Bob did the work</h2>
+  <p>The harness above is deliberately model-free, so none of it is evidence that IBM Bob
+  built this. <strong>The evidence is the task record</strong> — every session below is a row
+  in Bob's own task store, exported into this repository and summarised here. These are
+  <em>recorded sessions, not a live call</em>: nothing on this page reaches Bob.</p>
+
+  <div class="tot" id="ptot"></div>
+  <div class="rows" id="prov"><div class="prow"><span class="ptask">…</span>
+    <span class="pnum">—</span><span class="pstat">—</span></div></div>
+  <div class="meta" id="pmeta"></div>
+
+  <p class="meta">Two exports, not one, and that is the honest part: Bob's task store split
+  across two capitalisations of the same workspace path, so the IDE's own export captured
+  8 of 20 sessions. Both buckets are in <code>bob_sessions/</code> and both are counted
+  here. The failed sessions are shown rather than filtered — most carry
+  <code>BudgetExceededError</code>, which is what a hard 40-coin cap looks like from the
+  inside.</p>
+
   <footer>
     <p>The shipped harness runs behind this page, imported from the repository rather than
     reimplemented for the demo: <code>src/prove_bites.py</code>, <code>src/findings.py</code>.</p>
+    <p>Session figures are built from the committed exports by
+    <code>tools/build_provenance.py</code>; <code>--check</code> re-derives them and fails if
+    this page is serving a stale summary.</p>
     <p><a href="https://github.com/humilityisavirtue-collab/bob-secreview">Repository</a>
     &nbsp;·&nbsp; built for the IBM Bob 2.0 Hackathon</p>
   </footer>
@@ -123,6 +156,40 @@ fetch('/api/harness').then(r => r.json()).then(d => {
 }).catch(e => {
   el.innerHTML = `<div class="row"><span class="who">unreachable</span>
     <span class="why err">${e}</span><span class="verdict">—</span></div>`;
+});
+
+// --- Bob task-session provenance: a static 6 KB summary of the two exports.
+// Static on purpose. The exports total ~8.2 MB and the page must not fetch them,
+// nor put a serverless function in front of them to re-read 8 MB per request.
+const prov = document.getElementById('prov');
+const ptot = document.getElementById('ptot');
+const pmeta = document.getElementById('pmeta');
+
+fetch('/provenance.json').then(r => r.json()).then(d => {
+  const t = d.totals;
+  const tok = t.tokens >= 1e6 ? (t.tokens/1e6).toFixed(2)+'M'
+                              : Math.round(t.tokens/1000)+'k';
+  ptot.innerHTML = [
+    ['sessions', t.sessions], ['messages', t.messages],
+    ['Bobcoins', t.cost.toFixed(2)], ['context tokens', tok],
+  ].map(([k,v]) => `<div><b>${v}</b>${k}</div>`).join('');
+
+  prov.innerHTML = d.sessions.map(s => `
+    <div class="prow">
+      <span class="ptask" title="${s.title.replace(/"/g,'&quot;')}">${s.title}</span>
+      <span class="pnum">${s.cost.toFixed(3)}</span>
+      <span class="pstat s-${s.status}">${s.status}</span>
+    </div>`).join('');
+
+  const span = (t.first && t.last)
+    ? `${t.first.slice(0,10)} → ${t.last.slice(0,10)}` : 'the hackathon window';
+  pmeta.innerHTML = `${t.exports} exports · ${span} · cost in Bobcoins, as Bob's own
+    task store recorded it. Source: ` +
+    d.sources.map(s => `<b>${s.file}</b> (${s.tasks}/${s.messages})`).join(' · ');
+}).catch(e => {
+  prov.innerHTML = `<div class="prow"><span class="ptask err">provenance
+    summary unavailable — ${e}</span><span class="pnum">—</span>
+    <span class="pstat">—</span></div>`;
 });
 </script>
 </body>

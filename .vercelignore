@@ -6,3 +6,7 @@
 bob_sessions/
 tests/
 demo/
+# tools/ is a local build step: it reduces bob_sessions/ to public/provenance.json,
+# which is committed. Nothing at runtime reads it, and bob_sessions/ is not deployed
+# here anyway, so it could not re-derive the summary even if something asked it to.
+tools/
