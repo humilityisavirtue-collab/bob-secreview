@@ -204,7 +204,7 @@ def _canon_rule_id(rule: str) -> str:
 
     THE REVIEWER OWNS ITS rule_id NAMESPACE, and it does not have to agree with
     ours. This is not speculation -- IBM Bob named the gap himself, in this
-    project's own review session (`docs/armA.out.txt`, 2026-09-25):
+    project's own review session:
 
         "A probe can carry a SQL-injection defect but the agent could detect it
          under a different `rule_id` (e.g. `"sqli"` vs `"sql-injection"`),
@@ -603,7 +603,7 @@ if __name__ == "__main__":
     def rev_bites_variant(src, file):
         # Same defect, same capability, same findings -- the id is spelled the
         # way ANOTHER tool spells it (our "planted-rule" vs its "Planted_Rule").
-        # Bob's armA session named this exact hazard.
+        # Bob's own session named this exact hazard.
         if "evil" in src:
             return _FakeScanResult(["Planted_Rule", "other-rule"])
         return _FakeScanResult(["other-rule"])
