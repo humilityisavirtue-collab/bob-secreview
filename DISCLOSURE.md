@@ -47,7 +47,8 @@ graded target's own repository** — not by path, not by import, and not by `dif
 
 ## Built during the hackathon window
 
-`src/**` — all core project logic. `bob_sessions/**` — Bob IDE task-session exports.
+`src/**` — all core project logic. `bob_sessions/**` — Bob IDE task-session exports and
+consumption-summary screenshots.
 
 ### Which parts were Bob task sessions, and which were in-window hand work
 
@@ -130,8 +131,12 @@ The entry requirements ask for **both** an **exported IBM Bob report** of all re
 tasks/sessions **and** **screenshots**. They are two requirements, not one.
 
 - **Export — ✅ present:** `bob_sessions/`, below. Produced by Bob IDE's own Export Task History.
-- **Screenshots — ⏳ outstanding:** session captures are taken separately and belong in
-  `bob_sessions/` alongside the exports.
+- **Screenshots — ✅ present:** `bob_sessions/captures/` — **16 PNGs**, one per task, each a
+  capture of the IDE's own "task session consumption summary" panel. Of the sessions in this
+  workspace, 20 produced a consumption summary; **4 were transport smoke tests** with no work
+  in them and are excluded. Each frame was paired to its task by reading the panel's own
+  `Task Id` and `Workspace` fields — **not by capture order** — and `captures_manifest.csv`
+  records the task id, workspace, coins and sha256 of every frame.
 
 ## The Bob task-session exports (`bob_sessions/`)
 
