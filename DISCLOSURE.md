@@ -96,9 +96,20 @@ So the second is **rendered** from Bob's own task store — `~/.bob/db/bob.db`, 
 have altered Bob's own record and destroyed the very fork that makes this explanation true.
 
 **The rendering is verified, not asserted.** Pointed at the *first* bucket, the renderer
-reproduces the IDE's own export **byte-for-byte** — `sha256` of the tasks array
-`62153495433172022415d6a9931ea3a7ad05b4b4`, identical. It is held to that test rather than to
-a plausible appearance.
+reproduces the IDE's own export **field-exact: zero value differences across all 8 tasks and
+346 messages, with only the top-level export timestamp differing** — necessarily, since that
+timestamp is generated at render time.
+
+⚠ **The claim is "field-exact", not "byte-for-byte", and the difference is worth stating.**
+Canonicalised as `sha256(json.dumps(tasks, sort_keys=True))` the two tasks arrays are equal —
+`62153495433172022415d6a9931ea3a7ad05b4b4` — but the two writers emit **dict keys in different
+insertion orders**, so the raw file bytes are *not* identical. A byte comparison would fail
+while the data is the same. **The equality is by field; that is the claim a reader can check,
+and the stronger one would not survive being checked.**
+
+Two independent instruments agree on this: the author's, and an independent reproduction by a
+second seat on a copy of the renderer (never the original), compared in memory before the write,
+because pointed at the first bucket the renderer's own sweep correctly refuses to write.
 
 | file | kind | tasks | messages |
 |---|---|---|---|
