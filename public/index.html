@@ -171,7 +171,7 @@ fetch('/provenance.json').then(r => r.json()).then(d => {
                               : Math.round(t.tokens/1000)+'k';
   ptot.innerHTML = [
     ['sessions', t.sessions], ['messages', t.messages],
-    ['Bobcoins', t.cost.toFixed(2)], ['context tokens', tok],
+    ['Bobcoins recorded', t.cost.toFixed(2)], ['context tokens', tok],
   ].map(([k,v]) => `<div><b>${v}</b>${k}</div>`).join('');
 
   prov.innerHTML = d.sessions.map(s => `
@@ -183,8 +183,9 @@ fetch('/provenance.json').then(r => r.json()).then(d => {
 
   const span = (t.first && t.last)
     ? `${t.first.slice(0,10)} → ${t.last.slice(0,10)}` : 'the hackathon window';
-  pmeta.innerHTML = `${t.exports} exports · ${span} · cost in Bobcoins, as Bob's own
-    task store recorded it. Source: ` +
+  pmeta.innerHTML = `${t.exports} exports · ${span} · the coin figure is the
+    <b>sum of the per-session costs these exports record</b> — not a billed account
+    total, and ${t.priced} of ${t.sessions} sessions carry a cost. Source: ` +
     d.sources.map(s => `<b>${s.file}</b> (${s.tasks}/${s.messages})`).join(' · ');
 }).catch(e => {
   prov.innerHTML = `<div class="prow"><span class="ptask err">provenance

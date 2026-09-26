@@ -96,7 +96,13 @@ def build() -> dict:
             "exports": len(sources),
             "sessions": len(sessions),
             "messages": sum(s["messages"] for s in sessions),
+            #  `cost` is the sum of what these exports RECORD, which is not the
+            #  account's billed figure: the store also holds unrelated probe
+            #  workspaces, and one session here carries no cost at all. A total
+            #  derived from a partially-populated field has to say so, or it
+            #  invites the reader to treat it as the bill.
             "cost": round(sum(s["cost"] for s in sessions), 4),
+            "priced": sum(1 for s in sessions if s["cost"] > 0),
             "tokens": sum(s["tokens"] for s in sessions),
             "first": stamps[0] if stamps else None,
             "last": stamps[-1] if stamps else None,
@@ -129,7 +135,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(text, encoding="utf-8")
+    #  newline="\n" is load-bearing. .gitattributes pins `* text=auto eol=lf`, so
+    #  the default platform translation would write CRLF on Windows and leave the
+    #  tree dirty after every regeneration -- 211 bytes of pure line ending, which
+    #  reads as a content change to anyone comparing sizes.
+    OUT.write_text(text, encoding="utf-8", newline="\n")
     print(f"wrote {OUT.relative_to(ROOT)}  ({len(text):,} B)")
     print(f"  {t['exports']} exports · {t['sessions']} sessions · "
           f"{t['messages']} messages · {t['cost']} coins · {t['tokens']:,} tokens")
